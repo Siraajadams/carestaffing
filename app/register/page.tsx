@@ -147,10 +147,10 @@ export default function RegisterPage() {
               </div>
 
               <select style={styles.input} value={profession} onChange={(e) => setProfession(e.target.value)}>
-                <option>Pharmacist</option>
+                <option>Doctor</option>
                 <option>Pharmacy Technician</option>
                 <option>Nurse</option>
-                <option>Doctor</option>
+                <option>Pharmacist</option>
                 <option>Independent Prescriber</option>
                 <option>Optometrist</option>
               </select>
