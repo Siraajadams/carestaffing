@@ -22,11 +22,38 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
+  const [councilDoc, setCouncilDoc] = useState<File | null>(null);
+  const [nationalIdDoc, setNationalIdDoc] = useState<File | null>(null);
+  const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
+
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+
+  async function uploadFile(
+    bucket: string,
+    userId: string,
+    file: File | null,
+    label: string
+  ) {
+    if (!file) return "";
+
+    const safeName = file.name.replace(/\s+/g, "-").toLowerCase();
+    const path = `${userId}/${label}-${Date.now()}-${safeName}`;
+
+    const { error } = await supabase.storage.from(bucket).upload(path, file);
+
+    if (error) throw new Error(error.message);
+
+    if (bucket === "carestaffing-profile-photos") {
+      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+      return data.publicUrl;
+    }
+
+    return path;
+  }
 
   async function register(e: React.FormEvent) {
     e.preventDefault();
@@ -42,6 +69,16 @@ export default function RegisterPage() {
       return;
     }
 
+    if (accountType === "worker" && !councilDoc) {
+      setMessage("Please upload council registration document.");
+      return;
+    }
+
+    if (!nationalIdDoc) {
+      setMessage("Please upload national identity document.");
+      return;
+    }
+
     if (accountType === "organisation" && !organisationName) {
       setMessage("Please enter the organisation name.");
       return;
@@ -54,57 +91,80 @@ export default function RegisterPage() {
 
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signUp({
-      email: email.trim(),
-      password: password.trim(),
-      options: {
-        data: {
-          first_name: firstName.trim(),
-          surname: surname.trim(),
-          organisation_name: organisationName.trim(),
-          mobile: mobile.trim(),
-          profession,
-          registration_number: registrationNumber.trim(),
-          country,
-          city: city.trim(),
-          role: accountType,
-          platform: "CareStaffing",
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password: password.trim(),
+        options: {
+          data: {
+            first_name: firstName.trim(),
+            surname: surname.trim(),
+            organisation_name: organisationName.trim(),
+            mobile: mobile.trim(),
+            profession,
+            registration_number: registrationNumber.trim(),
+            country,
+            city: city.trim(),
+            role: accountType,
+            platform: "CareStaffing",
+          },
         },
-      },
-    });
+      });
 
-    if (error) {
-      setLoading(false);
-      setMessage(error.message);
-      return;
-    }
+      if (error) throw new Error(error.message);
 
-    if (data.user?.id) {
+      const userId = data.user?.id;
+      if (!userId) throw new Error("User registration failed.");
+
+      const councilDocUrl = await uploadFile(
+        "carestaffing-documents",
+        userId,
+        councilDoc,
+        "council-registration"
+      );
+
+      const nationalIdDocUrl = await uploadFile(
+        "carestaffing-documents",
+        userId,
+        nationalIdDoc,
+        "national-id"
+      );
+
+      const profilePhotoUrl = await uploadFile(
+        "carestaffing-profile-photos",
+        userId,
+        profilePhoto,
+        "profile-photo"
+      );
+
       const { error: profileError } = await supabase.from("profiles").upsert({
-        id: data.user.id,
+        id: userId,
+        role_type: accountType,
         first_name: firstName.trim(),
         surname: surname.trim(),
         organisation_name: organisationName.trim(),
         email: email.trim(),
-        mobile: mobile.trim(),
+        mobile_number: mobile.trim(),
         profession,
-        registration_number: registrationNumber.trim(),
+        professional_registration_number: registrationNumber.trim(),
         country,
-        city: city.trim(),
-        role: accountType,
+        city_area: city.trim(),
         platform: "CareStaffing",
+        council_registration_document_url: councilDocUrl,
+        national_id_document_url: nationalIdDocUrl,
+        profile_photo_url: profilePhotoUrl,
+        updated_at: new Date().toISOString(),
         created_at: new Date().toISOString(),
       });
 
-      if (profileError) {
-        setLoading(false);
-        setMessage(profileError.message);
-        return;
-      }
-    }
+      if (profileError) throw new Error(profileError.message);
 
-    setLoading(false);
-    router.push("/login");
+      router.push("/login");
+    } catch (err: any) {
+      setMessage(err.message || "Something went wrong.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -113,9 +173,7 @@ export default function RegisterPage() {
         <Link href="/" style={styles.backLink}>← Back to CareStaffing</Link>
 
         <p style={styles.label}>CareStaffing</p>
-
         <h1 style={styles.title}>Create your account</h1>
-
         <p style={styles.subtitle}>
           Register as a healthcare worker or healthcare organisation.
         </p>
@@ -156,13 +214,17 @@ export default function RegisterPage() {
               </select>
 
               <input style={styles.input} placeholder="Professional registration number" value={registrationNumber} onChange={(e) => setRegistrationNumber(e.target.value)} />
+
+              <label style={styles.fileLabel}>
+                Upload council registration document *
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => setCouncilDoc(e.target.files?.[0] || null)} />
+              </label>
             </>
           ) : (
             <input style={styles.input} placeholder="Organisation / pharmacy / clinic name *" value={organisationName} onChange={(e) => setOrganisationName(e.target.value)} />
           )}
 
           <input style={styles.input} type="email" placeholder="Email *" value={email} onChange={(e) => setEmail(e.target.value)} />
-
           <input style={styles.input} placeholder="Mobile number *" value={mobile} onChange={(e) => setMobile(e.target.value)} />
 
           <div style={styles.grid}>
@@ -176,6 +238,16 @@ export default function RegisterPage() {
 
             <input style={styles.input} placeholder="City / area" value={city} onChange={(e) => setCity(e.target.value)} />
           </div>
+
+          <label style={styles.fileLabel}>
+            Upload national identity document *
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => setNationalIdDoc(e.target.files?.[0] || null)} />
+          </label>
+
+          <label style={styles.fileLabel}>
+            Upload profile photo
+            <input type="file" accept="image/*" onChange={(e) => setProfilePhoto(e.target.files?.[0] || null)} />
+          </label>
 
           <div style={styles.grid}>
             <div style={styles.passwordWrap}>
@@ -301,6 +373,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     border: "1px solid #cbd5e1",
     fontSize: "16px",
     boxSizing: "border-box",
+  },
+  fileLabel: {
+    display: "grid",
+    gap: "8px",
+    padding: "14px 16px",
+    borderRadius: "12px",
+    border: "1px dashed #14b8a6",
+    background: "#f0fdfa",
+    color: "#115e59",
+    fontWeight: 700,
   },
   passwordWrap: {
     position: "relative",
