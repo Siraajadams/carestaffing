@@ -10,6 +10,7 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -34,23 +35,27 @@ export default function LoginPage() {
   }
 
   return (
-    <main style={{
-      minHeight: "100vh",
-      background: "#ecfeff",
-      display: "flex",
-      justifyContent: "center",
-      alignItems: "center",
-      padding: "24px",
-      fontFamily: "Arial, sans-serif",
-    }}>
-      <div style={{
-        width: "100%",
-        maxWidth: "440px",
-        background: "white",
-        borderRadius: "24px",
-        padding: "28px",
-        boxShadow: "0 20px 40px rgba(15, 23, 42, 0.12)",
-      }}>
+    <main
+      style={{
+        minHeight: "100vh",
+        background: "#ecfeff",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        padding: "24px",
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "440px",
+          background: "white",
+          borderRadius: "24px",
+          padding: "28px",
+          boxShadow: "0 20px 40px rgba(15, 23, 42, 0.12)",
+        }}
+      >
         <Link href="/" style={{ color: "#0f766e", fontWeight: 700 }}>
           ← Back to CareStaffing
         </Link>
@@ -67,21 +72,34 @@ export default function LoginPage() {
             style={input}
           />
 
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={input}
-          />
+          <div style={passwordWrap}>
+            <input
+              type={showPassword ? "text" : "password"}
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={passwordInput}
+            />
+
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              style={eyeButton}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? "🙈" : "👁️"}
+            </button>
+          </div>
 
           {message && (
-            <div style={{
-              background: "#fee2e2",
-              color: "#991b1b",
-              padding: "12px",
-              borderRadius: "12px",
-            }}>
+            <div
+              style={{
+                background: "#fee2e2",
+                color: "#991b1b",
+                padding: "12px",
+                borderRadius: "12px",
+              }}
+            >
               {message}
             </div>
           )}
@@ -120,4 +138,31 @@ const input: React.CSSProperties = {
   borderRadius: "12px",
   border: "1px solid #cbd5e1",
   fontSize: "16px",
+  boxSizing: "border-box",
+};
+
+const passwordWrap: React.CSSProperties = {
+  position: "relative",
+  width: "100%",
+};
+
+const passwordInput: React.CSSProperties = {
+  width: "100%",
+  padding: "14px 52px 14px 14px",
+  borderRadius: "12px",
+  border: "1px solid #cbd5e1",
+  fontSize: "16px",
+  boxSizing: "border-box",
+};
+
+const eyeButton: React.CSSProperties = {
+  position: "absolute",
+  right: "14px",
+  top: "50%",
+  transform: "translateY(-50%)",
+  background: "transparent",
+  border: "none",
+  cursor: "pointer",
+  fontSize: "18px",
+  zIndex: 10,
 };
