@@ -17,6 +17,8 @@ export default function RegisterPage() {
   const [mobile, setMobile] = useState("");
   const [profession, setProfession] = useState("Pharmacist");
   const [registrationNumber, setRegistrationNumber] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
+  const [gender, setGender] = useState("Female");
   const [country, setCountry] = useState("South Africa");
   const [city, setCity] = useState("");
   const [password, setPassword] = useState("");
@@ -31,6 +33,25 @@ export default function RegisterPage() {
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+
+  function calculateAge(dob: string) {
+    if (!dob) return null;
+
+    const birthDate = new Date(dob);
+    const today = new Date();
+
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+
+    if (
+      monthDiff < 0 ||
+      (monthDiff === 0 && today.getDate() < birthDate.getDate())
+    ) {
+      age--;
+    }
+
+    return age;
+  }
 
   async function uploadFile(
     bucket: string,
@@ -69,6 +90,16 @@ export default function RegisterPage() {
       return;
     }
 
+    if (accountType === "worker" && !dateOfBirth) {
+      setMessage("Please enter date of birth.");
+      return;
+    }
+
+    if (accountType === "worker" && !gender) {
+      setMessage("Please select gender.");
+      return;
+    }
+
     if (accountType === "worker" && !councilDoc) {
       setMessage("Please upload council registration document.");
       return;
@@ -92,6 +123,8 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
+      const age = calculateAge(dateOfBirth);
+
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password: password.trim(),
@@ -103,6 +136,9 @@ export default function RegisterPage() {
             mobile: mobile.trim(),
             profession,
             registration_number: registrationNumber.trim(),
+            date_of_birth: dateOfBirth,
+            age,
+            gender,
             country,
             city: city.trim(),
             role: accountType,
@@ -147,6 +183,9 @@ export default function RegisterPage() {
         mobile_number: mobile.trim(),
         profession,
         professional_registration_number: registrationNumber.trim(),
+        date_of_birth: dateOfBirth || null,
+        age,
+        gender,
         country,
         city_area: city.trim(),
         platform: "CareStaffing",
@@ -203,6 +242,27 @@ export default function RegisterPage() {
                 <input style={styles.input} placeholder="First name *" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
                 <input style={styles.input} placeholder="Surname *" value={surname} onChange={(e) => setSurname(e.target.value)} />
               </div>
+
+              <div style={styles.grid}>
+                <input
+                  style={styles.input}
+                  type="date"
+                  value={dateOfBirth}
+                  onChange={(e) => setDateOfBirth(e.target.value)}
+                />
+
+                <input
+                  style={styles.input}
+                  value={dateOfBirth ? `${calculateAge(dateOfBirth)} years old` : ""}
+                  placeholder="Age"
+                  readOnly
+                />
+              </div>
+
+              <select style={styles.input} value={gender} onChange={(e) => setGender(e.target.value)}>
+                <option>Female</option>
+                <option>Male</option>
+              </select>
 
               <select style={styles.input} value={profession} onChange={(e) => setProfession(e.target.value)}>
                 <option>Doctor</option>
