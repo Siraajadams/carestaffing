@@ -4,19 +4,21 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../lib/supabaseClient";
 
+type Shift = {
+  id: string;
+  title: string;
+  company_id: string;
+  location: string;
+  shift_date: string;
+  start_time: string;
+  end_time: string;
+  hourly_rate: number;
+};
+
 type Application = {
   id: string;
   status: string;
-  shifts: {
-    id: string;
-    title: string;
-    company_id: string;
-    location: string;
-    shift_date: string;
-    start_time: string;
-    end_time: string;
-    hourly_rate: number;
-  };
+  shifts: Shift;
 };
 
 export default function TimesheetsPage() {
@@ -41,7 +43,12 @@ export default function TimesheetsPage() {
       .eq("locum_id", user.id)
       .eq("status", "approved");
 
-    setApplications((data as Application[]) || []);
+    const formatted = (data || []).map((item: any) => ({
+      ...item,
+      shifts: Array.isArray(item.shifts) ? item.shifts[0] : item.shifts,
+    }));
+
+    setApplications(formatted);
   }
 
   async function submitTimesheet(app: Application) {
@@ -71,12 +78,18 @@ export default function TimesheetsPage() {
     });
 
     setMessage(error ? "Timesheet submission failed." : "Timesheet submitted.");
+
+    if (!error) {
+      setHoursWorked((prev) => ({ ...prev, [app.id]: "" }));
+    }
   }
 
   return (
     <main style={styles.page}>
       <div style={styles.container}>
-        <Link href="/dashboard" style={styles.back}>← Back to Dashboard</Link>
+        <Link href="/dashboard" style={styles.back}>
+          ← Back to Dashboard
+        </Link>
 
         <section style={styles.hero}>
           <h1 style={styles.title}>Timesheets</h1>
@@ -89,15 +102,26 @@ export default function TimesheetsPage() {
 
         <section style={styles.grid}>
           {applications.length === 0 ? (
-            <div style={styles.card}>No approved shifts available for timesheet submission.</div>
+            <div style={styles.card}>
+              No approved shifts available for timesheet submission.
+            </div>
           ) : (
             applications.map((app) => (
               <div key={app.id} style={styles.card}>
-                <h2>{app.shifts.title}</h2>
-                <p><b>Date:</b> {app.shifts.shift_date}</p>
-                <p><b>Time:</b> {app.shifts.start_time} - {app.shifts.end_time}</p>
-                <p><b>Location:</b> {app.shifts.location}</p>
-                <p><b>Agreed Rate:</b> R{app.shifts.hourly_rate}/hour</p>
+                <h2>{app.shifts?.title || "Approved Shift"}</h2>
+                <p>
+                  <b>Date:</b> {app.shifts?.shift_date}
+                </p>
+                <p>
+                  <b>Time:</b> {app.shifts?.start_time} -{" "}
+                  {app.shifts?.end_time}
+                </p>
+                <p>
+                  <b>Location:</b> {app.shifts?.location}
+                </p>
+                <p>
+                  <b>Agreed Rate:</b> R{app.shifts?.hourly_rate}/hour
+                </p>
 
                 <label style={styles.label}>Hours Worked</label>
                 <input
@@ -115,7 +139,10 @@ export default function TimesheetsPage() {
                   placeholder="Example: 8"
                 />
 
-                <button onClick={() => submitTimesheet(app)} style={styles.button}>
+                <button
+                  onClick={() => submitTimesheet(app)}
+                  style={styles.button}
+                >
                   Submit Timesheet
                 </button>
               </div>
