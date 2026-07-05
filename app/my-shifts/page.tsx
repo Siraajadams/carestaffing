@@ -1,57 +1,60 @@
-import Link from "next/link";
+"use client";
 
-const myShifts = [
-  {
-    id: 1,
-    title: "Pharmacist Locum Shift",
-    status: "Applied",
-    date: "12 July 2026",
-    time: "09:00 - 17:00",
-    location: "Cape Town",
-  },
-];
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { supabase } from "../../lib/supabaseClient";
 
 export default function MyShiftsPage() {
+  const [applications, setApplications] = useState<any[]>([]);
+
+  useEffect(() => {
+    loadMyShifts();
+  }, []);
+
+  async function loadMyShifts() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) return;
+
+    const { data } = await supabase
+      .from("shift_applications")
+      .select("id,status,created_at,shifts(*)")
+      .eq("locum_id", user.id)
+      .order("created_at", { ascending: false });
+
+    setApplications(data || []);
+  }
+
   return (
     <main style={styles.page}>
       <div style={styles.container}>
         <Link href="/dashboard" style={styles.back}>← Back to Dashboard</Link>
 
-        <h1 style={styles.title}>My Diary</h1>
-        <p style={styles.subtitle}>View your applied, upcoming and completed shifts.</p>
-
-        <section style={styles.stats}>
-          <div style={styles.statCard}>
-            <h2>1</h2>
-            <p>Applied</p>
-          </div>
-          <div style={styles.statCard}>
-            <h2>0</h2>
-            <p>Confirmed Shifts</p>
-          </div>
-          <div style={styles.statCard}>
-            <h2>31</h2>
-            <p>Days Available</p>
-          </div>
+        <section style={styles.hero}>
+          <h1 style={styles.title}>My Diary</h1>
+          <p style={styles.subtitle}>
+            View your applied, approved and completed shifts.
+          </p>
         </section>
 
-        <section style={styles.card}>
-          <h2>Upcoming Shifts</h2>
-
-          {myShifts.length === 0 ? (
-            <p>No shifts found.</p>
+        <div style={styles.grid}>
+          {applications.length === 0 ? (
+            <div style={styles.card}>No shift applications yet.</div>
           ) : (
-            myShifts.map((shift) => (
-              <div key={shift.id} style={styles.shift}>
-                <h3>{shift.title}</h3>
-                <p><strong>Status:</strong> {shift.status}</p>
-                <p><strong>Date:</strong> {shift.date}</p>
-                <p><strong>Time:</strong> {shift.time}</p>
-                <p><strong>Location:</strong> {shift.location}</p>
+            applications.map((item) => (
+              <div key={item.id} style={styles.card}>
+                <h2>{item.shifts?.title}</h2>
+                <p><b>Status:</b> {item.status}</p>
+                <p><b>Date:</b> {item.shifts?.shift_date}</p>
+                <p><b>Time:</b> {item.shifts?.start_time} - {item.shifts?.end_time}</p>
+                <p><b>Location:</b> {item.shifts?.location}</p>
+                <p><b>Rate:</b> R{item.shifts?.hourly_rate}/hour</p>
               </div>
             ))
           )}
-        </section>
+        </div>
       </div>
     </main>
   );
@@ -64,50 +67,26 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "24px",
     fontFamily: "Arial, sans-serif",
   },
-  container: {
-    maxWidth: "1100px",
-    margin: "0 auto",
+  container: { maxWidth: "1100px", margin: "0 auto" },
+  back: { color: "#0f766e", fontWeight: 800, textDecoration: "none" },
+  hero: {
+    background: "linear-gradient(135deg,#0f172a,#2563eb)",
+    color: "white",
+    padding: "30px",
+    borderRadius: "24px",
+    margin: "20px 0",
   },
-  back: {
-    color: "#334155",
-    textDecoration: "none",
-    fontWeight: 700,
-  },
-  title: {
-    fontSize: "36px",
-    marginTop: "24px",
-    marginBottom: "8px",
-    color: "#0f172a",
-  },
-  subtitle: {
-    color: "#64748b",
-    fontSize: "18px",
-    marginBottom: "24px",
-  },
-  stats: {
+  title: { fontSize: "36px", margin: 0 },
+  subtitle: { color: "#dbeafe" },
+  grid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))",
     gap: "18px",
-    marginBottom: "24px",
-  },
-  statCard: {
-    background: "white",
-    borderRadius: "22px",
-    padding: "24px",
-    textAlign: "center",
-    border: "1px solid #e2e8f0",
-    boxShadow: "0 8px 24px rgba(15,23,42,0.08)",
   },
   card: {
     background: "white",
+    padding: "22px",
     borderRadius: "22px",
-    padding: "24px",
-    border: "1px solid #e2e8f0",
     boxShadow: "0 8px 24px rgba(15,23,42,0.08)",
-  },
-  shift: {
-    borderTop: "1px solid #e2e8f0",
-    paddingTop: "16px",
-    marginTop: "16px",
   },
 };
