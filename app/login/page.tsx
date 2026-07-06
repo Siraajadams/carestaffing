@@ -31,7 +31,20 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/dashboard");
+    const { data: profile } = await supabase
+  .from("profiles")
+  .select("role, account_type")
+  .eq("id", data.user.id)
+  .single();
+
+if (
+  profile?.role === "employer" ||
+  profile?.account_type === "organisation"
+) {
+  router.push("/employer-dashboard");
+} else {
+  router.push("/dashboard");
+}
   }
 
   return (
