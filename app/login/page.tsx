@@ -19,32 +19,34 @@ export default function LoginPage() {
     setMessage("");
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password: password.trim(),
-    });
+    const { data: loginData, error: loginError } =
+      await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password.trim(),
+      });
 
-    setLoading(false);
-
-    if (error) {
-      setMessage(error.message);
+    if (loginError || !loginData.user) {
+      setLoading(false);
+      setMessage(loginError?.message || "Login failed.");
       return;
     }
 
     const { data: profile } = await supabase
-  .from("profiles")
-  .select("role, account_type")
-  .eq("id", data.user.id)
-  .single();
+      .from("profiles")
+      .select("role, account_type")
+      .eq("id", loginData.user.id)
+      .single();
 
-if (
-  profile?.role === "employer" ||
-  profile?.account_type === "organisation"
-) {
-  router.push("/employer-dashboard");
-} else {
-  router.push("/dashboard");
-}
+    setLoading(false);
+
+    if (
+      profile?.role === "employer" ||
+      profile?.account_type === "organisation"
+    ) {
+      router.push("/employer-dashboard");
+    } else {
+      router.push("/dashboard");
+    }
   }
 
   return (
@@ -83,6 +85,7 @@ if (
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             style={input}
+            required
           />
 
           <div style={passwordWrap}>
@@ -92,6 +95,7 @@ if (
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               style={passwordInput}
+              required
             />
 
             <button
