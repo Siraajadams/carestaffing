@@ -21,8 +21,8 @@ export default function LoginPage() {
 
     const { data: loginData, error: loginError } =
       await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: password.trim(),
+        email: email.trim().toLowerCase(),
+        password,
       });
 
     if (loginError || !loginData.user) {
@@ -31,19 +31,40 @@ export default function LoginPage() {
       return;
     }
 
-    const { data: profile } = await supabase
+    const userId = loginData.user.id;
+
+    const { data: profile, error: profileError } = await supabase
       .from("profiles")
       .select("role, account_type")
-      .eq("id", loginData.user.id)
-      .single();
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (profileError) {
+      console.error("Profile lookup error:", profileError);
+    }
+
+    const { data: company } = await supabase
+      .from("companies")
+      .select("id")
+      .eq("owner_id", userId)
+      .maybeSingle();
 
     setLoading(false);
 
-    if (
-      profile?.role === "employer" ||
-      profile?.account_type === "organisation"
-    ) {
-      router.push("/employer-dashboard");
+    const role = profile?.role?.toLowerCase();
+    const accountType = profile?.account_type?.toLowerCase();
+
+    const isEmployer =
+      role === "employer" ||
+      role === "organisation" ||
+      role === "organization" ||
+      accountType === "employer" ||
+      accountType === "organisation" ||
+      accountType === "organization" ||
+      !!company?.id;
+
+    if (isEmployer) {
+      router.push("/employer");
     } else {
       router.push("/dashboard");
     }
@@ -102,38 +123,14 @@ export default function LoginPage() {
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               style={eyeButton}
-              aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? "🙈" : "👁️"}
             </button>
           </div>
 
-          {message && (
-            <div
-              style={{
-                background: "#fee2e2",
-                color: "#991b1b",
-                padding: "12px",
-                borderRadius: "12px",
-              }}
-            >
-              {message}
-            </div>
-          )}
+          {message && <div style={errorBox}>{message}</div>}
 
-          <button
-            type="submit"
-            disabled={loading}
-            style={{
-              padding: "15px",
-              borderRadius: "14px",
-              border: "none",
-              background: "#0f766e",
-              color: "white",
-              fontWeight: 800,
-              cursor: "pointer",
-            }}
-          >
+          <button type="submit" disabled={loading} style={submitButton}>
             {loading ? "Logging in..." : "Login"}
           </button>
         </form>
@@ -182,4 +179,21 @@ const eyeButton: React.CSSProperties = {
   cursor: "pointer",
   fontSize: "18px",
   zIndex: 10,
+};
+
+const errorBox: React.CSSProperties = {
+  background: "#fee2e2",
+  color: "#991b1b",
+  padding: "12px",
+  borderRadius: "12px",
+};
+
+const submitButton: React.CSSProperties = {
+  padding: "15px",
+  borderRadius: "14px",
+  border: "none",
+  background: "#0f766e",
+  color: "white",
+  fontWeight: 800,
+  cursor: "pointer",
 };
