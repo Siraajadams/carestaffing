@@ -34,7 +34,6 @@ export default function EmployerPage() {
   const [endDate, setEndDate] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
-  const [rateType, setRateType] = useState("Hourly");
   const [rate, setRate] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -85,13 +84,10 @@ export default function EmployerPage() {
       end_date: endDate,
       start_time: startTime,
       end_time: endTime,
-      rate_type: rateType.toLowerCase(),
-
       employer_rate: employerRate,
       hourly_rate: locumRate,
       locum_rate: locumRate,
       platform_fee_per_hour: adminFee,
-
       notes,
       status: "open",
     });
@@ -260,17 +256,6 @@ export default function EmployerPage() {
             </div>
           </div>
 
-          <label>Rate Type</label>
-          <select
-            value={rateType}
-            onChange={(e) => setRateType(e.target.value)}
-            style={styles.input}
-          >
-            <option>Hourly</option>
-            <option>Daily</option>
-            <option>Session</option>
-          </select>
-
           <label>Organisation Agreed Rate (R)</label>
           <input
             type="number"
@@ -313,8 +298,15 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 30,
     fontFamily: "Arial, sans-serif",
   },
-  container: { maxWidth: 900, margin: "0 auto" },
-  back: { textDecoration: "none", color: "#0f766e", fontWeight: 700 },
+  container: {
+    maxWidth: 900,
+    margin: "0 auto",
+  },
+  back: {
+    textDecoration: "none",
+    color: "#0f766e",
+    fontWeight: 700,
+  },
   hero: {
     background: "linear-gradient(135deg,#0f172a,#0f766e)",
     padding: 30,
