@@ -269,7 +269,7 @@ export default function EmployerPage() {
             <b>Rate Breakdown</b>
             <p>Organisation pays: R{employerRate.toFixed(2)}</p>
             <p>Locum sees: R{locumRate.toFixed(2)}</p>
-            <p>CareStaffing 10% fee: R{adminFee.toFixed(2)}</p>
+            <p>CareStaffing 7% fee: R{adminFee.toFixed(2)}</p>
           </div>
 
           <label>Notes</label>
