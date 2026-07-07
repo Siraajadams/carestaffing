@@ -25,6 +25,7 @@ export default function EmployerPage() {
 
   const [title, setTitle] = useState("");
   const [profession, setProfession] = useState("Pharmacist");
+  const [positions, setPositions] = useState(1);
   const [businessName, setBusinessName] = useState("");
   const [country, setCountry] = useState("South Africa");
   const [province, setProvince] = useState("");
@@ -34,6 +35,7 @@ export default function EmployerPage() {
   const [endDate, setEndDate] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
+  const [rateType, setRateType] = useState("Hourly");
   const [rate, setRate] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -75,6 +77,7 @@ export default function EmployerPage() {
       company_id: companyId,
       title,
       profession_required: profession,
+      positions_required: positions,
       business_name: businessName,
       country,
       province,
@@ -84,6 +87,7 @@ export default function EmployerPage() {
       end_date: endDate,
       start_time: startTime,
       end_time: endTime,
+      rate_type: rateType.toLowerCase(),
       employer_rate: employerRate,
       hourly_rate: locumRate,
       locum_rate: locumRate,
@@ -108,6 +112,7 @@ export default function EmployerPage() {
     );
 
     setTitle("");
+    setPositions(1);
     setProvince("");
     setAddress("");
     setStartDate("");
@@ -158,6 +163,16 @@ export default function EmployerPage() {
             <option>Psychologist</option>
             <option>Locum GP</option>
           </select>
+
+          <label>Number of Locums Required</label>
+          <input
+            type="number"
+            min={1}
+            value={positions}
+            onChange={(e) => setPositions(Number(e.target.value))}
+            style={styles.input}
+            required
+          />
 
           <label>Name of Business</label>
           <input
@@ -255,6 +270,17 @@ export default function EmployerPage() {
               />
             </div>
           </div>
+
+          <label>Rate Type</label>
+          <select
+            value={rateType}
+            onChange={(e) => setRateType(e.target.value)}
+            style={styles.input}
+          >
+            <option>Hourly</option>
+            <option>Daily</option>
+            <option>Session</option>
+          </select>
 
           <label>Organisation Agreed Rate (R)</label>
           <input
