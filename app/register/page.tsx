@@ -8,7 +8,9 @@ import { supabase } from "../../lib/supabaseClient";
 export default function RegisterPage() {
   const router = useRouter();
 
-  const [accountType, setAccountType] = useState<"worker" | "organisation">("worker");
+  const [accountType, setAccountType] = useState<"worker" | "organisation">(
+    "worker"
+  );
 
   const [firstName, setFirstName] = useState("");
   const [surname, setSurname] = useState("");
@@ -27,6 +29,9 @@ export default function RegisterPage() {
   const [councilDoc, setCouncilDoc] = useState<File | null>(null);
   const [nationalIdDoc, setNationalIdDoc] = useState<File | null>(null);
   const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
+
+  const [cipcDoc, setCipcDoc] = useState<File | null>(null);
+  const [companyLogo, setCompanyLogo] = useState<File | null>(null);
 
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -64,23 +69,13 @@ export default function RegisterPage() {
     bucket: string,
     userId: string,
     file: File | null,
-    label: string
+    label: string,
+    makePublicUrl = false
   ) {
     if (!file) return "";
 
-    if (!userId) {
-      throw new Error("No user ID found for upload.");
-    }
-
     const safeName = cleanFileName(file.name);
     const filePath = `${userId}/${label}-${Date.now()}-${safeName}`;
-
-    console.log("Uploading file:", {
-      bucket,
-      userId,
-      fileName: file.name,
-      filePath,
-    });
 
     const { data, error } = await supabase.storage
       .from(bucket)
@@ -89,12 +84,9 @@ export default function RegisterPage() {
         upsert: true,
       });
 
-    if (error) {
-      console.error("Upload error:", error);
-      throw new Error(error.message);
-    }
+    if (error) throw new Error(error.message);
 
-    if (bucket === "carestaffing-profile-photos") {
+    if (makePublicUrl) {
       const { data: publicData } = supabase.storage
         .from(bucket)
         .getPublicUrl(data.path);
@@ -114,34 +106,43 @@ export default function RegisterPage() {
       return;
     }
 
-    if (accountType === "worker" && (!firstName || !surname || !profession)) {
-      setMessage("Please complete worker details.");
-      return;
+    if (accountType === "worker") {
+      if (!firstName || !surname || !profession) {
+        setMessage("Please complete worker details.");
+        return;
+      }
+
+      if (!dateOfBirth) {
+        setMessage("Please enter date of birth.");
+        return;
+      }
+
+      if (!registrationNumber) {
+        setMessage("Please enter professional registration number.");
+        return;
+      }
+
+      if (!councilDoc) {
+        setMessage("Please upload council registration document.");
+        return;
+      }
+
+      if (!nationalIdDoc) {
+        setMessage("Please upload national identity document.");
+        return;
+      }
     }
 
-    if (accountType === "worker" && !dateOfBirth) {
-      setMessage("Please enter date of birth.");
-      return;
-    }
+    if (accountType === "organisation") {
+      if (!organisationName) {
+        setMessage("Please enter the organisation name.");
+        return;
+      }
 
-    if (accountType === "worker" && !registrationNumber) {
-      setMessage("Please enter professional registration number.");
-      return;
-    }
-
-    if (accountType === "worker" && !councilDoc) {
-      setMessage("Please upload council registration document.");
-      return;
-    }
-
-    if (!nationalIdDoc) {
-      setMessage("Please upload national identity document.");
-      return;
-    }
-
-    if (accountType === "organisation" && !organisationName) {
-      setMessage("Please enter the organisation name.");
-      return;
+      if (!cipcDoc) {
+        setMessage("Please upload CIPC / company registration document.");
+        return;
+      }
     }
 
     if (password.trim() !== confirmPassword.trim()) {
@@ -153,9 +154,10 @@ export default function RegisterPage() {
 
     try {
       const age = calculateAge(dateOfBirth);
+      const cleanEmail = email.trim().toLowerCase();
 
       const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
+        email: cleanEmail,
         password: password.trim(),
         options: {
           data: {
@@ -170,7 +172,9 @@ export default function RegisterPage() {
             gender,
             country,
             city: city.trim(),
-            role: accountType,
+            role: accountType === "organisation" ? "employer" : "worker",
+            account_type:
+              accountType === "organisation" ? "employer" : "worker",
             platform: "CareStaffing",
           },
         },
@@ -184,51 +188,101 @@ export default function RegisterPage() {
         throw new Error("User registration failed. No user ID found.");
       }
 
-      const councilDocUrl = await uploadFile(
-        "carestaffing-documents",
-        userId,
-        councilDoc,
-        "council-registration"
-      );
+      let councilDocUrl = "";
+      let nationalIdDocUrl = "";
+      let profilePhotoUrl = "";
+      let cipcDocUrl = "";
+      let companyLogoUrl = "";
 
-      const nationalIdDocUrl = await uploadFile(
-        "carestaffing-documents",
-        userId,
-        nationalIdDoc,
-        "national-id"
-      );
+      if (accountType === "worker") {
+        councilDocUrl = await uploadFile(
+          "carestaffing-documents",
+          userId,
+          councilDoc,
+          "council-registration"
+        );
 
-      const profilePhotoUrl = await uploadFile(
-        "carestaffing-profile-photos",
-        userId,
-        profilePhoto,
-        "profile-photo"
-      );
+        nationalIdDocUrl = await uploadFile(
+          "carestaffing-documents",
+          userId,
+          nationalIdDoc,
+          "national-id"
+        );
 
-      const { error: profileError } = await supabase.from("profiles").upsert({
+        profilePhotoUrl = await uploadFile(
+          "carestaffing-profile-photos",
+          userId,
+          profilePhoto,
+          "profile-photo",
+          true
+        );
+      }
+
+      if (accountType === "organisation") {
+        cipcDocUrl = await uploadFile(
+          "carestaffing-documents",
+          userId,
+          cipcDoc,
+          "cipc-document"
+        );
+
+        companyLogoUrl = await uploadFile(
+          "carestaffing-profile-photos",
+          userId,
+          companyLogo,
+          "company-logo",
+          true
+        );
+      }
+
+      const profilePayload = {
         id: userId,
+        role: accountType === "organisation" ? "employer" : "worker",
+        account_type: accountType === "organisation" ? "employer" : "worker",
         role_type: accountType,
-        first_name: firstName.trim(),
-        surname: surname.trim(),
+        first_name: accountType === "worker" ? firstName.trim() : "",
+        surname: accountType === "worker" ? surname.trim() : "",
         organisation_name: organisationName.trim(),
-        email: email.trim(),
+        email: cleanEmail,
         mobile_number: mobile.trim(),
-        profession,
-        professional_registration_number: registrationNumber.trim(),
-        date_of_birth: dateOfBirth || null,
-        age,
-        gender,
+        profession: accountType === "worker" ? profession : "",
+        professional_registration_number:
+          accountType === "worker" ? registrationNumber.trim() : "",
+        date_of_birth: accountType === "worker" ? dateOfBirth || null : null,
+        age: accountType === "worker" ? age : null,
+        gender: accountType === "worker" ? gender : "",
         country,
         city_area: city.trim(),
         platform: "CareStaffing",
         council_registration_document_url: councilDocUrl,
         national_id_document_url: nationalIdDocUrl,
-        profile_photo_url: profilePhotoUrl,
+        profile_photo_url: profilePhotoUrl || companyLogoUrl,
         updated_at: new Date().toISOString(),
         created_at: new Date().toISOString(),
-      });
+      };
+
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .upsert(profilePayload);
 
       if (profileError) throw new Error(profileError.message);
+
+      if (accountType === "organisation") {
+        const { error: companyError } = await supabase.from("companies").upsert({
+          owner_id: userId,
+          business_name: organisationName.trim(),
+          email: cleanEmail,
+          mobile: mobile.trim(),
+          country,
+          city: city.trim(),
+          company_document_url: cipcDocUrl,
+          logo_url: companyLogoUrl,
+          updated_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+        });
+
+        if (companyError) throw new Error(companyError.message);
+      }
 
       setMessage("Account created successfully. Please login.");
       router.push("/login");
@@ -243,7 +297,9 @@ export default function RegisterPage() {
   return (
     <main style={styles.page}>
       <div style={styles.card}>
-        <Link href="/" style={styles.backLink}>← Back to CareStaffing</Link>
+        <Link href="/" style={styles.backLink}>
+          ← Back to CareStaffing
+        </Link>
 
         <p style={styles.label}>CareStaffing</p>
         <h1 style={styles.title}>Create your account</h1>
@@ -256,7 +312,11 @@ export default function RegisterPage() {
             <button
               type="button"
               onClick={() => setAccountType("worker")}
-              style={accountType === "worker" ? styles.toggleActive : styles.toggleButton}
+              style={
+                accountType === "worker"
+                  ? styles.toggleActive
+                  : styles.toggleButton
+              }
             >
               Healthcare Worker
             </button>
@@ -264,7 +324,11 @@ export default function RegisterPage() {
             <button
               type="button"
               onClick={() => setAccountType("organisation")}
-              style={accountType === "organisation" ? styles.toggleActive : styles.toggleButton}
+              style={
+                accountType === "organisation"
+                  ? styles.toggleActive
+                  : styles.toggleButton
+              }
             >
               Organisation
             </button>
@@ -298,7 +362,9 @@ export default function RegisterPage() {
 
                 <input
                   style={styles.input}
-                  value={dateOfBirth ? `${calculateAge(dateOfBirth)} years old` : ""}
+                  value={
+                    dateOfBirth ? `${calculateAge(dateOfBirth)} years old` : ""
+                  }
                   placeholder="Age"
                   readOnly
                 />
@@ -341,14 +407,58 @@ export default function RegisterPage() {
                   onChange={(e) => setCouncilDoc(e.target.files?.[0] || null)}
                 />
               </label>
+
+              <label style={styles.fileLabel}>
+                Upload national identity document *
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) =>
+                    setNationalIdDoc(e.target.files?.[0] || null)
+                  }
+                />
+              </label>
+
+              <label style={styles.fileLabel}>
+                Upload profile photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) =>
+                    setProfilePhoto(e.target.files?.[0] || null)
+                  }
+                />
+              </label>
             </>
           ) : (
-            <input
-              style={styles.input}
-              placeholder="Organisation / pharmacy / clinic name *"
-              value={organisationName}
-              onChange={(e) => setOrganisationName(e.target.value)}
-            />
+            <>
+              <input
+                style={styles.input}
+                placeholder="Organisation / pharmacy / clinic name *"
+                value={organisationName}
+                onChange={(e) => setOrganisationName(e.target.value)}
+              />
+
+              <label style={styles.fileLabel}>
+                Upload CIPC / company registration document *
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => setCipcDoc(e.target.files?.[0] || null)}
+                />
+              </label>
+
+              <label style={styles.fileLabel}>
+                Upload company logo
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) =>
+                    setCompanyLogo(e.target.files?.[0] || null)
+                  }
+                />
+              </label>
+            </>
           )}
 
           <input
@@ -386,24 +496,6 @@ export default function RegisterPage() {
               onChange={(e) => setCity(e.target.value)}
             />
           </div>
-
-          <label style={styles.fileLabel}>
-            Upload national identity document *
-            <input
-              type="file"
-              accept=".pdf,.jpg,.jpeg,.png"
-              onChange={(e) => setNationalIdDoc(e.target.files?.[0] || null)}
-            />
-          </label>
-
-          <label style={styles.fileLabel}>
-            Upload profile photo
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => setProfilePhoto(e.target.files?.[0] || null)}
-            />
-          </label>
 
           <div style={styles.grid}>
             <div style={styles.passwordWrap}>
