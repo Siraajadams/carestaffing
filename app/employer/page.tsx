@@ -54,15 +54,15 @@ export default function EmployerPage() {
 
     if (!user) return;
 
-    const { data } = await supabase
-      .from("companies")
-      .select("id,name,city,country")
-      .eq("owner_id", user.id)
-      .single();
+    const { data, error } = await supabase
+  .from("companies")
+  .select("id,business_name,city,country")
+  .eq("owner_id", user.id)
+  .maybeSingle();
 
     if (data) {
       setCompanyId(data.id);
-      setBusinessName(data.name || "");
+      setBusinessName(data.business_name || "");
       setCity(data.city || "");
       setCountry(data.country || "South Africa");
     }
