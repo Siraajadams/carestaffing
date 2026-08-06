@@ -1,23 +1,71 @@
 "use client";
 
+import Link from "next/link";
 import {
   ChangeEvent,
   FormEvent,
+  ReactNode,
   useEffect,
   useMemo,
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { supabase } from "../../lib/supabaseClient";
 
-const countrySettings: Record<
-  string,
-  {
-    dialingCode: string;
-    banks: string[];
-  }
-> = {
+type ProfileForm = {
+  first_name: string;
+  surname: string;
+  email: string;
+  gender: string;
+  date_of_birth: string;
+  id_number: string;
+  country: string;
+  dialing_code: string;
+  mobile: string;
+  profession: string;
+  city: string;
+  address: string;
+  registration_number: string;
+  practice_number: string;
+  bank_name: string;
+  account_holder_name: string;
+  account_number: string;
+  branch_code: string;
+  profile_photo_url: string;
+  cv_url: string;
+  cv_file_name: string;
+};
+
+type CountryConfiguration = {
+  dialingCode: string;
+  banks: string[];
+};
+
+const initialProfile: ProfileForm = {
+  first_name: "",
+  surname: "",
+  email: "",
+  gender: "",
+  date_of_birth: "",
+  id_number: "",
+  country: "South Africa",
+  dialing_code: "+27",
+  mobile: "",
+  profession: "Pharmacist",
+  city: "",
+  address: "",
+  registration_number: "",
+  practice_number: "",
+  bank_name: "",
+  account_holder_name: "",
+  account_number: "",
+  branch_code: "",
+  profile_photo_url: "",
+  cv_url: "",
+  cv_file_name: "",
+};
+
+const countryDetails: Record<string, CountryConfiguration> = {
   "South Africa": {
     dialingCode: "+27",
     banks: [
@@ -85,64 +133,16 @@ const countrySettings: Record<
   },
 };
 
-const countries = Object.keys(countrySettings);
-
 const professions = [
-  "Doctor",
   "Pharmacist",
-  "Nurse",
-  "Physiotherapist",
-  "Biokinetist",
   "Pharmacy Technician",
+  "Nurse",
+  "Doctor",
   "Independent Prescriber",
   "Optometrist",
 ];
 
-type ProfileForm = {
-  first_name: string;
-  surname: string;
-  email: string;
-  id_number: string;
-  mobile: string;
-  dialing_code: string;
-  gender: string;
-  date_of_birth: string;
-  profession: string;
-  registration_number: string;
-  practice_number: string;
-  country: string;
-  city: string;
-  address: string;
-  bank_name: string;
-  bank_account_name: string;
-  bank_account_number: string;
-  bank_branch_code: string;
-  profile_photo_url: string;
-};
-
-const emptyProfile: ProfileForm = {
-  first_name: "",
-  surname: "",
-  email: "",
-  id_number: "",
-  mobile: "",
-  dialing_code: "+27",
-  gender: "",
-  date_of_birth: "",
-  profession: "",
-  registration_number: "",
-  practice_number: "",
-  country: "South Africa",
-  city: "",
-  address: "",
-  bank_name: "",
-  bank_account_name: "",
-  bank_account_number: "",
-  bank_branch_code: "",
-  profile_photo_url: "",
-};
-
-function calculateAge(dateOfBirth: string) {
+function calculateAge(dateOfBirth: string): string {
   if (!dateOfBirth) {
     return "";
   }
@@ -160,8 +160,7 @@ function calculateAge(dateOfBirth: string) {
 
   if (
     monthDifference < 0 ||
-    (monthDifference === 0 &&
-      today.getDate() < birthDate.getDate())
+    (monthDifference === 0 && today.getDate() < birthDate.getDate())
   ) {
     age -= 1;
   }
@@ -169,115 +168,114 @@ function calculateAge(dateOfBirth: string) {
   return age >= 0 ? String(age) : "";
 }
 
+function safeFileName(fileName: string): string {
+  return fileName
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9._-]/g, "");
+}
+
 export default function ProfilePage() {
   const router = useRouter();
+
+  const [userId, setUserId] = useState("");
+  const [profile, setProfile] = useState<ProfileForm>(initialProfile);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [uploadingCv, setUploadingCv] = useState(false);
 
+  const [isEditing, setIsEditing] = useState(true);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-
-  const [userId, setUserId] = useState("");
-  const [isEditing, setIsEditing] = useState(true);
-  const [profileExists, setProfileExists] = useState(false);
-
-  const [profile, setProfile] =
-    useState<ProfileForm>(emptyProfile);
 
   const age = useMemo(
     () => calculateAge(profile.date_of_birth),
     [profile.date_of_birth],
   );
 
-  const banks =
-    countrySettings[profile.country]?.banks || ["Other"];
+  const availableBanks =
+    countryDetails[profile.country]?.banks || ["Other"];
 
   useEffect(() => {
-    loadProfile();
-  }, []);
+    async function loadProfile() {
+      setLoading(true);
+      setErrorMessage("");
 
-  async function loadProfile() {
-    setLoading(true);
-    setErrorMessage("");
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+      if (userError || !user) {
+        router.replace("/login");
+        return;
+      }
 
-    if (userError || !user) {
-      router.push("/login");
-      return;
-    }
+      setUserId(user.id);
 
-    setUserId(user.id);
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .maybeSingle();
 
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", user.id)
-      .maybeSingle();
+      if (error) {
+        setErrorMessage(error.message);
+        setLoading(false);
+        return;
+      }
 
-    if (error) {
-      setErrorMessage(error.message);
+      if (data) {
+        const savedCountry = data.country || "South Africa";
+
+        setProfile({
+          first_name: data.first_name || "",
+          surname: data.surname || "",
+          email: data.email || user.email || "",
+          gender: data.gender || "",
+          date_of_birth: data.date_of_birth || "",
+          id_number: data.id_number || "",
+          country: savedCountry,
+          dialing_code:
+            data.dialing_code ||
+            countryDetails[savedCountry]?.dialingCode ||
+            "+27",
+          mobile: data.mobile || "",
+          profession: data.profession || "Pharmacist",
+          city: data.city || "",
+          address: data.address || "",
+          registration_number: data.registration_number || "",
+          practice_number: data.practice_number || "",
+          bank_name: data.bank_name || "",
+          account_holder_name: data.account_holder_name || "",
+          account_number: data.account_number || "",
+          branch_code: data.branch_code || "",
+          profile_photo_url: data.profile_photo_url || "",
+          cv_url: data.cv_url || "",
+          cv_file_name: data.cv_file_name || "",
+        });
+
+        setIsEditing(false);
+      } else {
+        setProfile((current) => ({
+          ...current,
+          email: user.email || "",
+        }));
+
+        setIsEditing(true);
+      }
+
       setLoading(false);
-      return;
     }
 
-    if (data) {
-      const selectedCountry =
-        data.country || "South Africa";
+    loadProfile();
+  }, [router]);
 
-      setProfile({
-        first_name: data.first_name || "",
-        surname: data.surname || "",
-        email: data.email || user.email || "",
-        id_number: data.id_number || "",
-        mobile: data.mobile || "",
-        dialing_code:
-          data.dialing_code ||
-          countrySettings[selectedCountry]?.dialingCode ||
-          "+27",
-        gender: data.gender || "",
-        date_of_birth: data.date_of_birth || "",
-        profession: data.profession || "",
-        registration_number:
-          data.registration_number || "",
-        practice_number: data.practice_number || "",
-        country: selectedCountry,
-        city: data.city || "",
-        address: data.address || "",
-        bank_name: data.bank_name || "",
-        bank_account_name:
-          data.bank_account_name || "",
-        bank_account_number:
-          data.bank_account_number || "",
-        bank_branch_code:
-          data.bank_branch_code || "",
-        profile_photo_url:
-          data.profile_photo_url || "",
-      });
-
-      setProfileExists(true);
-      setIsEditing(false);
-    } else {
-      setProfile((current) => ({
-        ...current,
-        email: user.email || "",
-      }));
-
-      setProfileExists(false);
-      setIsEditing(true);
-    }
-
-    setLoading(false);
-  }
-
-  function updateField(
-    field: keyof ProfileForm,
-    value: string,
+  function updateField<K extends keyof ProfileForm>(
+    field: K,
+    value: ProfileForm[K],
   ) {
     setProfile((current) => ({
       ...current,
@@ -285,14 +283,13 @@ export default function ProfilePage() {
     }));
   }
 
-  function updateCountry(country: string) {
-    const details = countrySettings[country];
+  function handleCountryChange(country: string) {
+    const countryConfiguration = countryDetails[country];
 
     setProfile((current) => ({
       ...current,
       country,
-      dialing_code:
-        details?.dialingCode || current.dialing_code,
+      dialing_code: countryConfiguration?.dialingCode || "",
       bank_name: "",
     }));
   }
@@ -311,15 +308,15 @@ export default function ProfilePage() {
 
     if (!file.type.startsWith("image/")) {
       setErrorMessage(
-        "Please upload a JPG, PNG or WebP image.",
+        "Please select a JPG, PNG or WebP image for the profile photo.",
       );
+      event.target.value = "";
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      setErrorMessage(
-        "The profile photo must be smaller than 5 MB.",
-      );
+      setErrorMessage("The profile photo must be smaller than 5 MB.");
+      event.target.value = "";
       return;
     }
 
@@ -330,13 +327,12 @@ export default function ProfilePage() {
 
     const filePath = `${userId}/profile-${Date.now()}.${extension}`;
 
-    const { error: uploadError } =
-      await supabase.storage
-        .from("profile-photos")
-        .upload(filePath, file, {
-          upsert: true,
-          contentType: file.type,
-        });
+    const { error: uploadError } = await supabase.storage
+      .from("profile-photos")
+      .upload(filePath, file, {
+        upsert: true,
+        contentType: file.type,
+      });
 
     if (uploadError) {
       setUploadingPhoto(false);
@@ -344,50 +340,117 @@ export default function ProfilePage() {
       return;
     }
 
-    const { data: publicUrlData } =
-      supabase.storage
-        .from("profile-photos")
-        .getPublicUrl(filePath);
+    const { data: publicUrlData } = supabase.storage
+      .from("profile-photos")
+      .getPublicUrl(filePath);
 
-    updateField(
-      "profile_photo_url",
-      publicUrlData.publicUrl,
-    );
+    updateField("profile_photo_url", publicUrlData.publicUrl);
 
     setUploadingPhoto(false);
-
     setMessage(
-      "Profile photo uploaded. Click Save Profile to save the change.",
+      "Profile photo uploaded. Click Save Profile to confirm your changes.",
     );
   }
 
-  async function saveProfile(event: FormEvent) {
+  async function uploadCv(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file || !userId) {
+      return;
+    }
+
+    setMessage("");
+    setErrorMessage("");
+
+    const allowedTypes = [
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ];
+
+    const extension = file.name.split(".").pop()?.toLowerCase();
+
+    const allowedExtension =
+      extension === "pdf" ||
+      extension === "doc" ||
+      extension === "docx";
+
+    if (!allowedTypes.includes(file.type) && !allowedExtension) {
+      setErrorMessage("Please upload a PDF, DOC or DOCX CV.");
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setErrorMessage("The CV must be smaller than 10 MB.");
+      event.target.value = "";
+      return;
+    }
+
+    setUploadingCv(true);
+
+    const cleanedFileName =
+      safeFileName(file.name) || `locum-cv.${extension || "pdf"}`;
+
+    const filePath = `${userId}/cv-${Date.now()}-${cleanedFileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("locum-cvs")
+      .upload(filePath, file, {
+        upsert: true,
+        contentType: file.type || undefined,
+      });
+
+    if (uploadError) {
+      setUploadingCv(false);
+      setErrorMessage(uploadError.message);
+      return;
+    }
+
+    updateField("cv_url", filePath);
+    updateField("cv_file_name", file.name);
+
+    setUploadingCv(false);
+    setMessage("CV uploaded. Click Save Profile to confirm your changes.");
+  }
+
+  async function viewUploadedCv() {
+    if (!profile.cv_url) {
+      return;
+    }
+
+    setErrorMessage("");
+
+    const { data, error } = await supabase.storage
+      .from("locum-cvs")
+      .createSignedUrl(profile.cv_url, 60);
+
+    if (error || !data?.signedUrl) {
+      setErrorMessage(error?.message || "The CV could not be opened.");
+      return;
+    }
+
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setMessage("");
     setErrorMessage("");
 
     if (!userId) {
-      setErrorMessage(
-        "Your login session could not be found.",
-      );
+      setErrorMessage("Your login session could not be found.");
       return;
     }
 
-    if (!profile.first_name.trim()) {
-      setErrorMessage("First name is required.");
-      return;
-    }
-
-    if (!profile.surname.trim()) {
-      setErrorMessage("Surname is required.");
+    if (!profile.first_name.trim() || !profile.surname.trim()) {
+      setErrorMessage("First name and surname are required.");
       return;
     }
 
     if (!profile.id_number.trim()) {
-      setErrorMessage(
-        "ID or passport number is required.",
-      );
+      setErrorMessage("ID or passport number is required.");
       return;
     }
 
@@ -396,46 +459,50 @@ export default function ProfilePage() {
       return;
     }
 
+    if (!age) {
+      setErrorMessage("Please enter a valid date of birth.");
+      return;
+    }
+
+    if (!profile.profession) {
+      setErrorMessage("Please select your profession.");
+      return;
+    }
+
     setSaving(true);
 
-    const { error } = await supabase
-      .from("profiles")
-      .upsert(
-        {
-          id: userId,
-          first_name: profile.first_name.trim(),
-          surname: profile.surname.trim(),
-          email: profile.email.trim(),
-          id_number: profile.id_number.trim(),
-          mobile: profile.mobile.trim(),
-          dialing_code: profile.dialing_code,
-          gender: profile.gender,
-          date_of_birth: profile.date_of_birth,
-          profession: profile.profession,
-          registration_number:
-            profile.registration_number.trim(),
-          practice_number:
-            profile.practice_number.trim(),
-          country: profile.country,
-          city: profile.city.trim(),
-          address: profile.address.trim(),
-          bank_name: profile.bank_name,
-          bank_account_name:
-            profile.bank_account_name.trim(),
-          bank_account_number:
-            profile.bank_account_number.trim(),
-          bank_branch_code:
-            profile.bank_branch_code.trim(),
-          profile_photo_url:
-            profile.profile_photo_url,
-          role: "worker",
-          platform: "CareStaffing",
-          updated_at: new Date().toISOString(),
-        },
-        {
-          onConflict: "id",
-        },
-      );
+    const { error } = await supabase.from("profiles").upsert(
+      {
+        id: userId,
+        first_name: profile.first_name.trim(),
+        surname: profile.surname.trim(),
+        email: profile.email.trim(),
+        gender: profile.gender,
+        date_of_birth: profile.date_of_birth,
+        id_number: profile.id_number.trim(),
+        country: profile.country,
+        dialing_code: profile.dialing_code,
+        mobile: profile.mobile.trim(),
+        profession: profile.profession,
+        city: profile.city.trim(),
+        address: profile.address.trim(),
+        registration_number: profile.registration_number.trim(),
+        practice_number: profile.practice_number.trim(),
+        bank_name: profile.bank_name,
+        account_holder_name: profile.account_holder_name.trim(),
+        account_number: profile.account_number.trim(),
+        branch_code: profile.branch_code.trim(),
+        profile_photo_url: profile.profile_photo_url,
+        cv_url: profile.cv_url,
+        cv_file_name: profile.cv_file_name,
+        role: "worker",
+        platform: "CareStaffing",
+        updated_at: new Date().toISOString(),
+      },
+      {
+        onConflict: "id",
+      },
+    );
 
     setSaving(false);
 
@@ -444,17 +511,14 @@ export default function ProfilePage() {
       return;
     }
 
-    setProfileExists(true);
-    setIsEditing(false);
     setMessage("Profile saved successfully.");
+    setIsEditing(false);
   }
 
   if (loading) {
     return (
-      <main style={styles.page}>
-        <div style={styles.container}>
-          <p>Loading professional profile...</p>
-        </div>
+      <main style={styles.loadingPage}>
+        <p>Loading professional profile...</p>
       </main>
     );
   }
@@ -462,57 +526,45 @@ export default function ProfilePage() {
   return (
     <main style={styles.page}>
       <div style={styles.container}>
-        <Link
-          href="/dashboard"
-          style={styles.backLink}
-        >
+        <Link href="/dashboard" style={styles.backLink}>
           ← Back to Dashboard
         </Link>
 
-        <section style={styles.hero}>
+        <section style={styles.header}>
           <div>
             <p style={styles.eyebrow}>CareStaffing</p>
 
-            <h1 style={styles.heroTitle}>
-              Professional Profile
-            </h1>
+            <h1 style={styles.title}>Professional Profile</h1>
 
-            <p style={styles.heroText}>
-              Manage your registration, contact,
-              compliance and payment details.
+            <p style={styles.subtitle}>
+              Manage your registration, contact, compliance, CV and
+              payment details.
             </p>
           </div>
 
           {profile.profile_photo_url ? (
             <img
               src={profile.profile_photo_url}
-              alt="Professional profile"
-              style={styles.heroPhoto}
+              alt="Professional profile headshot"
+              style={styles.headerPhoto}
             />
           ) : (
-            <div style={styles.heroPlaceholder}>
-              👤
-            </div>
+            <div style={styles.photoPlaceholder}>👤</div>
           )}
         </section>
 
-        {errorMessage && (
-          <div style={styles.errorMessage}>
-            {errorMessage}
-          </div>
-        )}
+        <form onSubmit={saveProfile}>
+          {errorMessage && (
+            <div style={styles.errorMessage}>{errorMessage}</div>
+          )}
 
-        {message && (
-          <div style={styles.successMessage}>
-            {message}
-          </div>
-        )}
+          {message && (
+            <div style={styles.successMessage}>{message}</div>
+          )}
 
-        <form
-          onSubmit={saveProfile}
-          style={styles.form}
-        >
-          <Card title="Profile Photo">
+          <section style={styles.section}>
+            <h2 style={styles.sectionTitle}>Profile Photo</h2>
+
             <div style={styles.photoRow}>
               {profile.profile_photo_url ? (
                 <img
@@ -521,301 +573,379 @@ export default function ProfilePage() {
                   style={styles.profilePhoto}
                 />
               ) : (
-                <div
-                  style={
-                    styles.profilePhotoPlaceholder
-                  }
-                >
-                  👤
-                </div>
+                <div style={styles.largePhotoPlaceholder}>👤</div>
               )}
 
-              <div>
-                <p style={styles.photoHeading}>
+              <div style={styles.uploadDetails}>
+                <p style={styles.uploadTitle}>
                   Professional headshot suggested
                 </p>
 
                 <p style={styles.helpText}>
-                  Upload a clear, front-facing JPG,
-                  PNG or WebP image under 5 MB.
+                  Upload a clear, front-facing JPG, PNG or WebP image
+                  under 5 MB. Do not upload an ID document as your
+                  profile photograph.
                 </p>
 
                 <input
                   type="file"
                   accept="image/png,image/jpeg,image/webp"
-                  disabled={
-                    !isEditing || uploadingPhoto
-                  }
+                  disabled={!isEditing || uploadingPhoto}
                   onChange={uploadProfilePhoto}
                 />
 
                 {uploadingPhoto && (
-                  <p style={styles.uploadText}>
+                  <p style={styles.statusText}>
                     Uploading profile photo...
                   </p>
                 )}
               </div>
             </div>
-          </Card>
+          </section>
 
-          <Card title="Personal Details">
-            <div style={styles.grid}>
-              <Field
-                label="First Name"
-                value={profile.first_name}
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField("first_name", value)
-                }
-              />
+          <section style={styles.section}>
+            <h2 style={styles.sectionTitle}>Curriculum Vitae</h2>
 
-              <Field
-                label="Surname"
-                value={profile.surname}
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField("surname", value)
-                }
-              />
-
-              <Field
-                label="Email"
-                type="email"
-                value={profile.email}
-                disabled
-                onChange={() => {}}
-              />
-
-              <SelectField
-                label="Gender"
-                value={profile.gender}
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField("gender", value)
-                }
-                options={[
-                  "Male",
-                  "Female",
-                  "Non-binary",
-                  "Prefer not to say",
-                ]}
-              />
-
-              <Field
-                label="ID / Passport Number"
-                value={profile.id_number}
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField("id_number", value)
-                }
-              />
-
-              <Field
-                type="date"
-                label="Date of Birth"
-                value={profile.date_of_birth}
-                disabled={!isEditing}
-                max={
-                  new Date()
-                    .toISOString()
-                    .split("T")[0]
-                }
-                onChange={(value) =>
-                  updateField(
-                    "date_of_birth",
-                    value,
-                  )
-                }
-              />
-
-              <Field
-                label="Age"
-                value={age}
-                disabled
-                onChange={() => {}}
-                placeholder="Calculated automatically"
-              />
-
-              <SelectField
-                label="Profession"
-                value={profile.profession}
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField("profession", value)
-                }
-                options={professions}
-              />
-
-              <SelectField
-                label="Country"
-                value={profile.country}
-                disabled={!isEditing}
-                onChange={updateCountry}
-                options={countries}
-              />
-
-              <Field
-                label="Dialling Code"
-                value={profile.dialing_code}
-                disabled
-                onChange={() => {}}
-              />
-
-              <Field
-                label="Mobile"
-                value={profile.mobile}
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField("mobile", value)
-                }
-              />
-
-              <Field
-                label="City"
-                value={profile.city}
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField("city", value)
-                }
-              />
-            </div>
-
-            <div style={{ marginTop: "16px" }}>
-              <Field
-                label="Address"
-                value={profile.address}
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField("address", value)
-                }
-              />
-            </div>
-          </Card>
-
-          <Card title="Registration & Compliance">
-            <div style={styles.gridTwo}>
-              <Field
-                label="Registration Number"
-                value={
-                  profile.registration_number
-                }
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField(
-                    "registration_number",
-                    value,
-                  )
-                }
-              />
-
-              <Field
-                label="Practice Number"
-                value={profile.practice_number}
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField(
-                    "practice_number",
-                    value,
-                  )
-                }
-              />
-            </div>
-          </Card>
-
-          <Card title="Payment Details">
             <p style={styles.helpText}>
-              The available banks change according
-              to the country selected above.
+              Upload your latest professional CV. PDF format is
+              recommended. DOC and DOCX files are also accepted.
             </p>
 
-            <div style={styles.grid}>
-              <SelectField
-                label="Bank Name"
-                value={profile.bank_name}
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField("bank_name", value)
-                }
-                options={banks}
-              />
+            <div style={styles.documentUpload}>
+              <div style={styles.documentIcon}>📄</div>
 
-              <Field
-                label="Account Holder Name"
-                value={
-                  profile.bank_account_name
-                }
-                disabled={!isEditing}
-                onChange={(value) =>
-                  updateField(
-                    "bank_account_name",
-                    value,
-                  )
-                }
-              />
+              <div style={styles.documentDetails}>
+                <p style={styles.documentTitle}>
+                  {profile.cv_file_name || "No CV uploaded"}
+                </p>
 
-              <Field
-                label="Account Number"
-                value={
-                  profile.bank_account_number
-                }
-                disabled={!isEditing}
-                inputMode="numeric"
-                onChange={(value) =>
-                  updateField(
-                    "bank_account_number",
-                    value,
-                  )
-                }
-              />
+                <input
+                  type="file"
+                  accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  disabled={!isEditing || uploadingCv}
+                  onChange={uploadCv}
+                />
 
-              <Field
-                label="Branch Code"
-                value={
-                  profile.bank_branch_code
-                }
-                disabled={!isEditing}
-                inputMode="numeric"
-                onChange={(value) =>
-                  updateField(
-                    "bank_branch_code",
-                    value,
-                  )
-                }
-              />
+                <p style={styles.helpText}>
+                  Maximum file size: 10 MB.
+                </p>
+
+                {uploadingCv && (
+                  <p style={styles.statusText}>Uploading CV...</p>
+                )}
+
+                {profile.cv_url && !uploadingCv && (
+                  <button
+                    type="button"
+                    style={styles.viewDocumentButton}
+                    onClick={viewUploadedCv}
+                  >
+                    View Uploaded CV
+                  </button>
+                )}
+              </div>
             </div>
-          </Card>
+          </section>
+
+          <section style={styles.section}>
+            <h2 style={styles.sectionTitle}>Personal Details</h2>
+
+            <div style={styles.gridFour}>
+              <Field label="First Name">
+                <input
+                  style={styles.input}
+                  value={profile.first_name}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    updateField("first_name", event.target.value)
+                  }
+                />
+              </Field>
+
+              <Field label="Surname">
+                <input
+                  style={styles.input}
+                  value={profile.surname}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    updateField("surname", event.target.value)
+                  }
+                />
+              </Field>
+
+              <Field label="Email">
+                <input
+                  style={styles.input}
+                  type="email"
+                  value={profile.email}
+                  disabled
+                />
+              </Field>
+
+              <Field label="Gender">
+                <select
+                  style={styles.input}
+                  value={profile.gender}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    updateField("gender", event.target.value)
+                  }
+                >
+                  <option value="">Select gender</option>
+                  <option value="Female">Female</option>
+                  <option value="Male">Male</option>
+                  <option value="Non-binary">Non-binary</option>
+                  <option value="Prefer not to say">
+                    Prefer not to say
+                  </option>
+                </select>
+              </Field>
+
+              <Field label="ID / Passport Number">
+                <input
+                  style={styles.input}
+                  value={profile.id_number}
+                  disabled={!isEditing}
+                  placeholder="ID or passport number"
+                  onChange={(event) =>
+                    updateField("id_number", event.target.value)
+                  }
+                />
+              </Field>
+
+              <Field label="Date of Birth">
+                <input
+                  style={styles.input}
+                  type="date"
+                  value={profile.date_of_birth}
+                  disabled={!isEditing}
+                  max={new Date().toISOString().split("T")[0]}
+                  onChange={(event) =>
+                    updateField("date_of_birth", event.target.value)
+                  }
+                />
+              </Field>
+
+              <Field label="Age">
+                <input
+                  style={styles.input}
+                  value={age}
+                  disabled
+                  placeholder="Calculated automatically"
+                />
+              </Field>
+
+              <Field label="Profession">
+                <select
+                  style={styles.input}
+                  value={profile.profession}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    updateField("profession", event.target.value)
+                  }
+                >
+                  {professions.map((profession) => (
+                    <option key={profession} value={profession}>
+                      {profession}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Country">
+                <select
+                  style={styles.input}
+                  value={profile.country}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    handleCountryChange(event.target.value)
+                  }
+                >
+                  {Object.keys(countryDetails).map((country) => (
+                    <option key={country} value={country}>
+                      {country}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Dialling Code">
+                <input
+                  style={styles.input}
+                  value={profile.dialing_code}
+                  disabled
+                />
+              </Field>
+
+              <Field label="Mobile">
+                <input
+                  style={styles.input}
+                  value={profile.mobile}
+                  disabled={!isEditing}
+                  placeholder="Mobile number"
+                  onChange={(event) =>
+                    updateField("mobile", event.target.value)
+                  }
+                />
+              </Field>
+
+              <Field label="City">
+                <input
+                  style={styles.input}
+                  value={profile.city}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    updateField("city", event.target.value)
+                  }
+                />
+              </Field>
+            </div>
+
+            <div style={styles.addressField}>
+              <Field label="Address">
+                <input
+                  style={styles.input}
+                  value={profile.address}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    updateField("address", event.target.value)
+                  }
+                />
+              </Field>
+            </div>
+          </section>
+
+          <section style={styles.section}>
+            <h2 style={styles.sectionTitle}>
+              Registration &amp; Compliance
+            </h2>
+
+            <div style={styles.gridTwo}>
+              <Field label="Registration Number">
+                <input
+                  style={styles.input}
+                  value={profile.registration_number}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    updateField(
+                      "registration_number",
+                      event.target.value,
+                    )
+                  }
+                />
+              </Field>
+
+              <Field label="Practice Number">
+                <input
+                  style={styles.input}
+                  value={profile.practice_number}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    updateField("practice_number", event.target.value)
+                  }
+                />
+              </Field>
+            </div>
+          </section>
+
+          <section style={styles.section}>
+            <h2 style={styles.sectionTitle}>Payment Details</h2>
+
+            <p style={styles.helpText}>
+              Banking information is used for approved locum shift
+              payments.
+            </p>
+
+            <div style={styles.gridFour}>
+              <Field label="Bank Name">
+                <select
+                  style={styles.input}
+                  value={profile.bank_name}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    updateField("bank_name", event.target.value)
+                  }
+                >
+                  <option value="">Select bank</option>
+
+                  {availableBanks.map((bank) => (
+                    <option key={bank} value={bank}>
+                      {bank}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Account Holder Name">
+                <input
+                  style={styles.input}
+                  value={profile.account_holder_name}
+                  disabled={!isEditing}
+                  onChange={(event) =>
+                    updateField(
+                      "account_holder_name",
+                      event.target.value,
+                    )
+                  }
+                />
+              </Field>
+
+              <Field label="Account Number">
+                <input
+                  style={styles.input}
+                  value={profile.account_number}
+                  disabled={!isEditing}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  onChange={(event) =>
+                    updateField("account_number", event.target.value)
+                  }
+                />
+              </Field>
+
+              <Field label="Branch Code">
+                <input
+                  style={styles.input}
+                  value={profile.branch_code}
+                  disabled={!isEditing}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  onChange={(event) =>
+                    updateField("branch_code", event.target.value)
+                  }
+                />
+              </Field>
+            </div>
+          </section>
 
           <div style={styles.actions}>
             {isEditing ? (
               <>
-                <Link
-                  href="/dashboard"
-                  style={styles.cancelBtn}
+                <button
+                  type="button"
+                  style={styles.cancelButton}
+                  onClick={() => router.push("/dashboard")}
                 >
                   Cancel
-                </Link>
+                </button>
 
                 <button
                   type="submit"
                   disabled={
-                    saving || uploadingPhoto
+                    saving || uploadingPhoto || uploadingCv
                   }
-                  style={styles.saveBtn}
+                  style={styles.saveButton}
                 >
-                  {saving
-                    ? "Saving Profile..."
-                    : "Save Profile"}
+                  {saving ? "Saving Profile..." : "Save Profile"}
                 </button>
               </>
             ) : (
               <>
-                <div style={styles.savedBadge}>
-                  ✓ Profile saved
-                </div>
+                <div style={styles.savedBadge}>✓ Profile saved</div>
 
                 <button
                   type="button"
-                  style={styles.updateBtn}
+                  style={styles.updateButton}
                   onClick={() => {
                     setMessage("");
                     setErrorMessage("");
@@ -833,149 +963,51 @@ export default function ProfilePage() {
   );
 }
 
-function Card({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section style={styles.card}>
-      <h2 style={styles.cardTitle}>{title}</h2>
-      {children}
-    </section>
-  );
-}
-
 function Field({
   label,
-  value,
-  onChange,
-  type = "text",
-  disabled = false,
-  placeholder,
-  max,
-  inputMode,
+  children,
 }: {
   label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-  disabled?: boolean;
-  placeholder?: string;
-  max?: string;
-  inputMode?:
-    | "text"
-    | "numeric"
-    | "decimal"
-    | "email"
-    | "tel";
+  children: ReactNode;
 }) {
   return (
-    <div style={styles.fieldWrap}>
-      <label style={styles.label}>
-        {label}
-      </label>
-
-      <input
-        type={type}
-        value={value}
-        disabled={disabled}
-        max={max}
-        inputMode={inputMode}
-        onChange={(event) =>
-          onChange(event.target.value)
-        }
-        placeholder={placeholder || label}
-        style={
-          disabled
-            ? styles.disabledInput
-            : styles.input
-        }
-      />
-    </div>
+    <label style={styles.field}>
+      <span style={styles.fieldLabel}>{label}</span>
+      {children}
+    </label>
   );
 }
 
-function SelectField({
-  label,
-  value,
-  onChange,
-  options,
-  disabled = false,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: string[];
-  disabled?: boolean;
-}) {
-  return (
-    <div style={styles.fieldWrap}>
-      <label style={styles.label}>
-        {label}
-      </label>
-
-      <select
-        value={value}
-        disabled={disabled}
-        onChange={(event) =>
-          onChange(event.target.value)
-        }
-        style={
-          disabled
-            ? styles.disabledInput
-            : styles.input
-        }
-      >
-        <option value="">
-          Select {label}
-        </option>
-
-        {options.map((item) => (
-          <option
-            key={item}
-            value={item}
-          >
-            {item}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-const styles: Record<
-  string,
-  React.CSSProperties
-> = {
+const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
     background: "#f1f5f9",
-    padding: "24px",
+    padding: "30px 20px 60px",
+    fontFamily: "Arial, sans-serif",
+  },
+  loadingPage: {
+    minHeight: "100vh",
+    display: "grid",
+    placeItems: "center",
+    background: "#f1f5f9",
     fontFamily: "Arial, sans-serif",
   },
   container: {
-    maxWidth: "1150px",
+    width: "100%",
+    maxWidth: "1220px",
     margin: "0 auto",
   },
   backLink: {
-    display: "inline-block",
-    marginBottom: "18px",
     color: "#0f766e",
     textDecoration: "none",
-    fontWeight: 700,
+    fontWeight: 800,
   },
-  hero: {
-    background:
-      "linear-gradient(135deg, #0f172a, #164e63)",
-    color: "white",
-    borderRadius: "24px",
-    padding: "32px",
-    marginBottom: "24px",
-    boxShadow:
-      "0 12px 30px rgba(15,23,42,0.25)",
+  header: {
+    marginTop: "20px",
+    padding: "34px",
+    borderRadius: "28px",
+    color: "#ffffff",
+    background: "linear-gradient(135deg, #0f172a, #164e63)",
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
@@ -984,55 +1016,67 @@ const styles: Record<
   eyebrow: {
     margin: "0 0 8px",
     color: "#99f6e4",
-    fontSize: "13px",
     fontWeight: 900,
     letterSpacing: "1px",
     textTransform: "uppercase",
   },
-  heroTitle: {
-    fontSize: "38px",
-    margin: 0,
-    fontWeight: 800,
+  title: {
+    margin: "0",
+    fontSize: "42px",
+    lineHeight: 1.15,
   },
-  heroText: {
-    marginTop: "10px",
-    color: "#cbd5e1",
-    fontSize: "16px",
+  subtitle: {
+    margin: "12px 0 0",
+    color: "#dbeafe",
+    fontSize: "17px",
+    lineHeight: 1.55,
   },
-  heroPhoto: {
+  headerPhoto: {
     width: "105px",
     height: "105px",
-    borderRadius: "50%",
     objectFit: "cover",
-    border: "4px solid white",
+    borderRadius: "50%",
+    border: "4px solid rgba(255,255,255,0.8)",
   },
-  heroPlaceholder: {
+  photoPlaceholder: {
     width: "105px",
     height: "105px",
     borderRadius: "50%",
-    background: "rgba(255,255,255,0.15)",
+    background: "rgba(255,255,255,0.14)",
     display: "grid",
     placeItems: "center",
     fontSize: "48px",
   },
-  form: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "22px",
+  section: {
+    marginTop: "22px",
+    padding: "28px",
+    borderRadius: "24px",
+    background: "#ffffff",
+    boxShadow: "0 12px 30px rgba(15,23,42,0.06)",
   },
-  card: {
-    background: "white",
-    borderRadius: "22px",
-    padding: "24px",
-    border: "1px solid #e2e8f0",
-    boxShadow:
-      "0 8px 22px rgba(15,23,42,0.08)",
-  },
-  cardTitle: {
-    marginTop: 0,
-    marginBottom: "18px",
-    fontSize: "23px",
+  sectionTitle: {
+    margin: "0 0 20px",
     color: "#0f172a",
+    fontSize: "25px",
+  },
+  helpText: {
+    color: "#64748b",
+    margin: "5px 0 12px",
+    lineHeight: 1.5,
+  },
+  statusText: {
+    color: "#0f766e",
+    fontWeight: 700,
+  },
+  uploadTitle: {
+    margin: "0 0 10px",
+    fontSize: "17px",
+    color: "#0f172a",
+    fontWeight: 900,
+  },
+  uploadDetails: {
+    flex: 1,
+    minWidth: "240px",
   },
   photoRow: {
     display: "flex",
@@ -1047,7 +1091,7 @@ const styles: Record<
     objectFit: "cover",
     border: "1px solid #cbd5e1",
   },
-  profilePhotoPlaceholder: {
+  largePhotoPlaceholder: {
     width: "130px",
     height: "130px",
     borderRadius: "20px",
@@ -1056,120 +1100,132 @@ const styles: Record<
     placeItems: "center",
     fontSize: "55px",
   },
-  photoHeading: {
-    margin: "0 0 7px",
-    fontWeight: 800,
-    color: "#0f172a",
+  documentUpload: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "18px",
+    padding: "20px",
+    border: "1px dashed #94a3b8",
+    borderRadius: "18px",
+    background: "#f8fafc",
+    flexWrap: "wrap",
   },
-  helpText: {
-    color: "#64748b",
-    lineHeight: 1.5,
-  },
-  uploadText: {
-    color: "#0f766e",
-    fontWeight: 700,
-  },
-  grid: {
+  documentIcon: {
+    width: "64px",
+    height: "64px",
+    borderRadius: "16px",
+    background: "#ccfbf1",
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(230px, 1fr))",
+    placeItems: "center",
+    fontSize: "32px",
+  },
+  documentDetails: {
+    flex: 1,
+    minWidth: "230px",
+  },
+  documentTitle: {
+    margin: "0 0 12px",
+    color: "#0f172a",
+    fontWeight: 800,
+  },
+  viewDocumentButton: {
+    marginTop: "10px",
+    padding: "10px 16px",
+    borderRadius: "11px",
+    border: "1px solid #0f766e",
+    background: "#ffffff",
+    color: "#0f766e",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+  gridFour: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
     gap: "16px",
   },
   gridTwo: {
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(280px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
     gap: "16px",
   },
-  fieldWrap: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "7px",
+  addressField: {
+    marginTop: "16px",
   },
-  label: {
-    fontSize: "14px",
-    fontWeight: 700,
+  field: {
+    display: "grid",
+    gap: "8px",
+  },
+  fieldLabel: {
+    fontWeight: 800,
     color: "#334155",
+    fontSize: "14px",
   },
   input: {
     width: "100%",
-    boxSizing: "border-box",
-    border: "1px solid #cbd5e1",
-    borderRadius: "14px",
-    padding: "13px 14px",
     minHeight: "50px",
+    padding: "12px 14px",
+    border: "1px solid #cbd5e1",
+    borderRadius: "13px",
+    background: "#ffffff",
     fontSize: "15px",
-    outline: "none",
-    background: "white",
-    color: "#0f172a",
+    boxSizing: "border-box",
   },
-  disabledInput: {
-    width: "100%",
-    boxSizing: "border-box",
-    border: "1px solid #cbd5e1",
-    borderRadius: "14px",
-    padding: "13px 14px",
-    minHeight: "50px",
-    fontSize: "15px",
-    background: "#f8fafc",
-    color: "#64748b",
+  successMessage: {
+    marginTop: "20px",
+    padding: "14px 16px",
+    background: "#dcfce7",
+    color: "#166534",
+    borderRadius: "13px",
+    fontWeight: 800,
+  },
+  errorMessage: {
+    marginTop: "20px",
+    padding: "14px 16px",
+    background: "#fee2e2",
+    color: "#991b1b",
+    borderRadius: "13px",
+    fontWeight: 800,
   },
   actions: {
     display: "flex",
     justifyContent: "flex-end",
     alignItems: "center",
     gap: "12px",
-    marginBottom: "40px",
+    marginTop: "24px",
     flexWrap: "wrap",
   },
-  cancelBtn: {
+  cancelButton: {
     padding: "14px 22px",
-    borderRadius: "14px",
-    background: "white",
-    color: "#334155",
-    textDecoration: "none",
-    fontWeight: 700,
+    borderRadius: "13px",
     border: "1px solid #cbd5e1",
+    background: "#ffffff",
+    color: "#334155",
+    cursor: "pointer",
+    fontWeight: 800,
   },
-  saveBtn: {
-    padding: "14px 26px",
-    borderRadius: "14px",
+  saveButton: {
+    padding: "14px 24px",
+    borderRadius: "13px",
     border: "none",
     background: "#0f172a",
-    color: "white",
-    fontWeight: 800,
+    color: "#ffffff",
     cursor: "pointer",
+    fontWeight: 900,
   },
-  updateBtn: {
-    padding: "14px 26px",
-    borderRadius: "14px",
+  updateButton: {
+    padding: "14px 24px",
+    borderRadius: "13px",
     border: "none",
     background: "#0f766e",
-    color: "white",
-    fontWeight: 800,
+    color: "#ffffff",
     cursor: "pointer",
+    fontWeight: 900,
   },
   savedBadge: {
     padding: "13px 18px",
     borderRadius: "999px",
     background: "#dcfce7",
     color: "#166534",
-    fontWeight: 800,
-  },
-  successMessage: {
-    background: "#dcfce7",
-    color: "#166534",
-    padding: "14px 18px",
-    borderRadius: "16px",
-    marginBottom: "18px",
-    fontWeight: 700,
-  },
-  errorMessage: {
-    background: "#fee2e2",
-    color: "#991b1b",
-    padding: "14px 18px",
-    borderRadius: "16px",
-    marginBottom: "18px",
-    fontWeight: 700,
+    fontWeight: 900,
   },
 };
