@@ -5,12 +5,19 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
+type LoginType = "worker" | "employer";
+
 export default function LoginPage() {
   const router = useRouter();
 
+  const [loginType, setLoginType] =
+    useState<LoginType>("worker");
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [showPassword, setShowPassword] =
+    useState(false);
+
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -36,14 +43,17 @@ export default function LoginPage() {
         });
 
       if (loginError || !loginData.user) {
-        setMessage(loginError?.message || "Login failed.");
+        setMessage(
+          loginError?.message || "Login failed.",
+        );
+        setLoading(false);
         return;
       }
 
       const userId = loginData.user.id;
 
       /*
-       * Look up the user's main CareStaffing profile.
+       * Get the CareStaffing profile.
        */
       const { data: profile, error: profileError } =
         await supabase
@@ -62,16 +72,14 @@ export default function LoginPage() {
 
       if (profileError) {
         console.error(
-          "CareStaffing profile lookup error:",
+          "Profile lookup error:",
           profileError,
         );
       }
 
       /*
-       * Employer accounts may also have a company record.
-       * This provides a second way of identifying an employer,
-       * even where an older profile does not yet have the correct
-       * role/account_type value.
+       * Check whether this person owns an employer /
+       * organisation account.
        */
       const { data: company, error: companyError } =
         await supabase
@@ -82,29 +90,29 @@ export default function LoginPage() {
 
       if (companyError) {
         console.error(
-          "CareStaffing company lookup error:",
+          "Company lookup error:",
           companyError,
         );
       }
 
-      const role = profile?.role
-        ?.toString()
-        .trim()
-        .toLowerCase();
+      const role =
+        profile?.role?.toString().trim().toLowerCase() ||
+        "";
 
-      const accountType = profile?.account_type
-        ?.toString()
-        .trim()
-        .toLowerCase();
+      const accountType =
+        profile?.account_type
+          ?.toString()
+          .trim()
+          .toLowerCase() || "";
 
-      const employerRoles = [
+      const employerValues = [
         "employer",
         "organisation",
         "organization",
         "company",
       ];
 
-      const workerRoles = [
+      const workerValues = [
         "worker",
         "locum",
         "healthcare_worker",
@@ -112,50 +120,67 @@ export default function LoginPage() {
       ];
 
       const isEmployer =
-        employerRoles.includes(role || "") ||
-        employerRoles.includes(accountType || "") ||
-        Boolean(profile?.company_id) ||
+        employerValues.includes(role) ||
+        employerValues.includes(accountType) ||
         Boolean(profile?.organisation_name) ||
+        Boolean(profile?.company_id) ||
         Boolean(company?.id);
 
       const isWorker =
-        workerRoles.includes(role || "") ||
-        workerRoles.includes(accountType || "");
+        workerValues.includes(role) ||
+        workerValues.includes(accountType);
 
       /*
-       * EMPLOYER / ORGANISATION
+       * Employer login selected
        */
-      if (isEmployer) {
+      if (loginType === "employer") {
+        if (!isEmployer) {
+          await supabase.auth.signOut();
+
+          setMessage(
+            "This account is not registered as an employer or organisation. Please select Healthcare Professional instead.",
+          );
+
+          setLoading(false);
+          return;
+        }
+
         router.replace("/employer");
         router.refresh();
         return;
       }
 
       /*
-       * HEALTHCARE WORKER / LOCUM
+       * Worker login selected
        */
-      if (isWorker) {
+      if (loginType === "worker") {
+        if (isEmployer && !isWorker) {
+          await supabase.auth.signOut();
+
+          setMessage(
+            "This account is registered as an employer or organisation. Please select Employers & Organisations.",
+          );
+
+          setLoading(false);
+          return;
+        }
+
         router.replace("/dashboard");
         router.refresh();
         return;
       }
-
-      /*
-       * Older worker records may not contain role/account_type.
-       * If there is no company associated with the user, default
-       * the account to the healthcare-worker dashboard.
-       */
-      router.replace("/dashboard");
-      router.refresh();
     } catch (error) {
-      console.error("Unexpected CareStaffing login error:", error);
+      console.error(
+        "Unexpected CareStaffing login error:",
+        error,
+      );
 
       setMessage(
         error instanceof Error
           ? error.message
           : "An unexpected login error occurred.",
       );
-    } finally {
+
       setLoading(false);
     }
   }
@@ -173,53 +198,110 @@ export default function LoginPage() {
           <h1 style={styles.title}>Login</h1>
 
           <p style={styles.subtitle}>
-            Access your healthcare professional or employer account.
+            Choose your account type, then enter your
+            CareStaffing login details.
           </p>
         </div>
 
-        <div style={styles.accountInfo}>
-          <div style={styles.accountItem}>
-            <span style={styles.accountIcon}>👩‍⚕️</span>
+        {/* ACCOUNT TYPE SELECTION */}
+        <div style={styles.accountSelection}>
+          <button
+            type="button"
+            onClick={() => {
+              setLoginType("worker");
+              setMessage("");
+            }}
+            style={{
+              ...styles.accountButton,
+              ...(loginType === "worker"
+                ? styles.accountButtonSelected
+                : {}),
+            }}
+          >
+            <div style={styles.iconBox}>👩‍⚕️</div>
 
-            <div>
-              <strong style={styles.accountTitle}>
-                Healthcare Professionals
-              </strong>
+            <div style={styles.accountText}>
+              <div style={styles.accountHeadingRow}>
+                <strong style={styles.accountTitle}>
+                  Healthcare Professionals
+                </strong>
+
+                {loginType === "worker" && (
+                  <span style={styles.selectedBadge}>
+                    ✓ Selected
+                  </span>
+                )}
+              </div>
 
               <p style={styles.accountDescription}>
-                Find shifts, manage your diary, timesheets,
-                invoices and payments.
+                Find shifts, manage your diary,
+                timesheets, invoices and payments.
               </p>
             </div>
-          </div>
+          </button>
 
-          <div style={styles.divider} />
+          <button
+            type="button"
+            onClick={() => {
+              setLoginType("employer");
+              setMessage("");
+            }}
+            style={{
+              ...styles.accountButton,
+              ...(loginType === "employer"
+                ? styles.accountButtonSelected
+                : {}),
+            }}
+          >
+            <div style={styles.iconBox}>🏢</div>
 
-          <div style={styles.accountItem}>
-            <span style={styles.accountIcon}>🏢</span>
+            <div style={styles.accountText}>
+              <div style={styles.accountHeadingRow}>
+                <strong style={styles.accountTitle}>
+                  Employers & Organisations
+                </strong>
 
-            <div>
-              <strong style={styles.accountTitle}>
-                Employers & Organisations
-              </strong>
+                {loginType === "employer" && (
+                  <span style={styles.selectedBadge}>
+                    ✓ Selected
+                  </span>
+                )}
+              </div>
 
               <p style={styles.accountDescription}>
                 Post shifts, manage applicants, workers,
                 timesheets and payments.
               </p>
             </div>
-          </div>
+          </button>
+        </div>
+
+        {/* SELECTED LOGIN HEADING */}
+        <div style={styles.selectedLoginBox}>
+          <span style={styles.selectedLoginLabel}>
+            Logging in as
+          </span>
+
+          <strong style={styles.selectedLoginValue}>
+            {loginType === "worker"
+              ? "Healthcare Professional"
+              : "Employer / Organisation"}
+          </strong>
         </div>
 
         <form onSubmit={login} style={styles.form}>
           <label style={styles.field}>
-            <span style={styles.label}>Email address</span>
+            <span style={styles.label}>
+              Email address
+            </span>
 
             <input
               type="email"
               placeholder="you@example.com"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) =>
+                setEmail(e.target.value)
+              }
               style={styles.input}
               autoComplete="email"
               required
@@ -231,10 +313,14 @@ export default function LoginPage() {
 
             <div style={styles.passwordWrap}>
               <input
-                type={showPassword ? "text" : "password"}
+                type={
+                  showPassword ? "text" : "password"
+                }
                 placeholder="Enter your password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) =>
+                  setPassword(e.target.value)
+                }
                 style={styles.passwordInput}
                 autoComplete="current-password"
                 required
@@ -243,7 +329,9 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() =>
-                  setShowPassword((current) => !current)
+                  setShowPassword(
+                    (current) => !current,
+                  )
                 }
                 style={styles.eyeButton}
                 aria-label={
@@ -258,7 +346,9 @@ export default function LoginPage() {
           </label>
 
           {message && (
-            <div style={styles.errorBox}>{message}</div>
+            <div style={styles.errorBox}>
+              {message}
+            </div>
           )}
 
           <button
@@ -274,7 +364,9 @@ export default function LoginPage() {
           >
             {loading
               ? "Checking your account..."
-              : "Login to CareStaffing"}
+              : loginType === "worker"
+                ? "Login as Healthcare Professional"
+                : "Login as Employer"}
           </button>
         </form>
 
@@ -283,12 +375,16 @@ export default function LoginPage() {
             New to CareStaffing?
           </p>
 
-          <Link href="/register" style={styles.registerButton}>
+          <Link
+            href="/register"
+            style={styles.registerButton}
+          >
             Create an Account
           </Link>
 
           <p style={styles.registerHelp}>
-            Register as a healthcare professional or employer.
+            Register as a healthcare professional or
+            employer / organisation.
           </p>
         </div>
       </div>
@@ -310,7 +406,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   card: {
     width: "100%",
-    maxWidth: "520px",
+    maxWidth: "560px",
     background: "#ffffff",
     borderRadius: "28px",
     padding: "32px",
@@ -326,7 +422,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   brandBlock: {
-    marginTop: "26px",
+    marginTop: "24px",
   },
 
   brand: {
@@ -352,22 +448,56 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.55,
   },
 
-  accountInfo: {
+  accountSelection: {
+    display: "grid",
+    gap: "12px",
     marginTop: "24px",
-    padding: "18px",
-    borderRadius: "18px",
-    background: "#f8fafc",
-    border: "1px solid #e2e8f0",
   },
 
-  accountItem: {
+  accountButton: {
+    width: "100%",
     display: "flex",
-    gap: "13px",
     alignItems: "flex-start",
+    gap: "14px",
+    padding: "17px",
+    borderRadius: "17px",
+    border: "2px solid #e2e8f0",
+    background: "#f8fafc",
+    textAlign: "left",
+    cursor: "pointer",
+    transition: "all 0.15s ease",
+    boxSizing: "border-box",
   },
 
-  accountIcon: {
-    fontSize: "27px",
+  accountButtonSelected: {
+    border: "2px solid #0f766e",
+    background: "#ecfdf5",
+    boxShadow:
+      "0 6px 18px rgba(15,118,110,0.12)",
+  },
+
+  iconBox: {
+    width: "44px",
+    height: "44px",
+    flexShrink: 0,
+    borderRadius: "12px",
+    display: "grid",
+    placeItems: "center",
+    background: "#ffffff",
+    fontSize: "24px",
+  },
+
+  accountText: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  accountHeadingRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: "8px",
+    flexWrap: "wrap",
   },
 
   accountTitle: {
@@ -375,23 +505,50 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "15px",
   },
 
+  selectedBadge: {
+    display: "inline-block",
+    padding: "4px 8px",
+    borderRadius: "999px",
+    background: "#0f766e",
+    color: "#ffffff",
+    fontSize: "11px",
+    fontWeight: 800,
+  },
+
   accountDescription: {
-    margin: "5px 0 0",
+    margin: "6px 0 0",
     color: "#64748b",
     fontSize: "13px",
     lineHeight: 1.45,
   },
 
-  divider: {
-    height: "1px",
-    background: "#e2e8f0",
-    margin: "15px 0",
+  selectedLoginBox: {
+    marginTop: "18px",
+    padding: "11px 14px",
+    borderRadius: "12px",
+    background: "#f0fdfa",
+    border: "1px solid #99f6e4",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: "10px",
+    flexWrap: "wrap",
+  },
+
+  selectedLoginLabel: {
+    color: "#64748b",
+    fontSize: "13px",
+  },
+
+  selectedLoginValue: {
+    color: "#0f766e",
+    fontSize: "14px",
   },
 
   form: {
     display: "grid",
     gap: "16px",
-    marginTop: "24px",
+    marginTop: "20px",
   },
 
   field: {
@@ -450,6 +607,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "13px 14px",
     borderRadius: "12px",
     fontWeight: 700,
+    lineHeight: 1.45,
   },
 
   submitButton: {
