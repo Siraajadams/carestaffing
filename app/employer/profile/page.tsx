@@ -282,10 +282,46 @@ export default function EmployerProfilePage() {
        */
 
       const companyPayload = {
-        owner_id: user.id,
+  owner_id: user.id,
 
-        business_name:
-          businessName.trim(),
+  // Existing companies table requires "name"
+  name: businessName.trim(),
+
+  // Keep business_name because the employer profile uses it
+  business_name: businessName.trim(),
+
+  registration_number:
+    registrationNumber.trim() || null,
+
+  vat_number:
+    vatNumber.trim() || null,
+
+  contact_person:
+    contactPerson.trim() || null,
+
+  email:
+    email.trim().toLowerCase(),
+
+  mobile:
+    mobile.trim() || null,
+
+  country,
+
+  province:
+    province.trim() || null,
+
+  city:
+    city.trim(),
+
+  address:
+    address.trim(),
+
+  postal_code:
+    postalCode.trim() || null,
+
+  updated_at:
+    new Date().toISOString(),
+};,
 
         registration_number:
           registrationNumber.trim() || null,
