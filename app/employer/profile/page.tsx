@@ -30,7 +30,12 @@ export default function EmployerProfilePage() {
   const [companyId, setCompanyId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
   const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<
+    "success" | "error" | ""
+  >("");
+
   const [saved, setSaved] = useState(false);
 
   const [businessName, setBusinessName] = useState("");
@@ -41,9 +46,7 @@ export default function EmployerProfilePage() {
   const [email, setEmail] = useState("");
   const [mobile, setMobile] = useState("");
 
-  const [country, setCountry] =
-    useState("South Africa");
-
+  const [country, setCountry] = useState("South Africa");
   const [province, setProvince] = useState("");
   const [city, setCity] = useState("");
   const [address, setAddress] = useState("");
@@ -56,6 +59,7 @@ export default function EmployerProfilePage() {
   async function loadEmployer() {
     setLoading(true);
     setMessage("");
+    setMessageType("");
 
     try {
       const {
@@ -63,14 +67,22 @@ export default function EmployerProfilePage() {
         error: userError,
       } = await supabase.auth.getUser();
 
-      if (userError || !user) {
+      if (userError) {
+        console.error("Auth user lookup error:", userError);
+        throw userError;
+      }
+
+      if (!user) {
         router.replace("/login");
         return;
       }
 
       setEmail(user.email || "");
 
-      const { data: profile } = await supabase
+      const {
+        data: profile,
+        error: profileError,
+      } = await supabase
         .from("profiles")
         .select(
           `
@@ -79,11 +91,19 @@ export default function EmployerProfilePage() {
           mobile,
           organisation_name,
           role,
-          account_type
+          account_type,
+          company_id
         `,
         )
         .eq("id", user.id)
         .maybeSingle();
+
+      if (profileError) {
+        console.error(
+          "Employer profile lookup error:",
+          profileError,
+        );
+      }
 
       if (profile) {
         const fullName = [
@@ -95,27 +115,37 @@ export default function EmployerProfilePage() {
 
         setContactPerson(fullName);
         setMobile(profile.mobile || "");
-        setBusinessName(
-          profile.organisation_name || "",
-        );
+
+        if (profile.organisation_name) {
+          setBusinessName(profile.organisation_name);
+        }
+
+        if (profile.company_id) {
+          setCompanyId(profile.company_id);
+        }
       }
 
-      const { data: company, error: companyError } =
-        await supabase
-          .from("companies")
-          .select("*")
-          .eq("owner_id", user.id)
-          .maybeSingle();
+      const {
+        data: company,
+        error: companyError,
+      } = await supabase
+        .from("companies")
+        .select("*")
+        .eq("owner_id", user.id)
+        .maybeSingle();
 
       if (companyError) {
         console.error(
-          "Company profile lookup:",
+          "Company profile lookup error:",
           companyError,
         );
+
+        throw companyError;
       }
 
       if (company) {
         setCompanyId(company.id || "");
+
         setBusinessName(
           company.business_name || "",
         );
@@ -128,12 +158,26 @@ export default function EmployerProfilePage() {
 
         setContactPerson(
           company.contact_person ||
-            contactPerson ||
+            [
+              profile?.first_name,
+              profile?.surname,
+            ]
+              .filter(Boolean)
+              .join(" ") ||
             "",
         );
 
-        setEmail(company.email || user.email || "");
-        setMobile(company.mobile || "");
+        setEmail(
+          company.email ||
+            user.email ||
+            "",
+        );
+
+        setMobile(
+          company.mobile ||
+            profile?.mobile ||
+            "",
+        );
 
         setCountry(
           company.country || "South Africa",
@@ -142,20 +186,25 @@ export default function EmployerProfilePage() {
         setProvince(company.province || "");
         setCity(company.city || "");
         setAddress(company.address || "");
-        setPostalCode(company.postal_code || "");
+        setPostalCode(
+          company.postal_code || "",
+        );
 
         setSaved(true);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(
         "Employer profile load error:",
         error,
       );
 
+      setMessageType("error");
+
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not load organisation profile.",
+        error?.message ||
+          error?.details ||
+          error?.hint ||
+          "Could not load organisation profile.",
       );
     } finally {
       setLoading(false);
@@ -168,28 +217,34 @@ export default function EmployerProfilePage() {
     e.preventDefault();
 
     setMessage("");
+    setMessageType("");
 
     if (!businessName.trim()) {
+      setMessageType("error");
       setMessage("Business name is required.");
       return;
     }
 
     if (!email.trim()) {
+      setMessageType("error");
       setMessage("Email address is required.");
       return;
     }
 
     if (!country) {
+      setMessageType("error");
       setMessage("Country is required.");
       return;
     }
 
     if (!city.trim()) {
+      setMessageType("error");
       setMessage("City is required.");
       return;
     }
 
     if (!address.trim()) {
+      setMessageType("error");
       setMessage("Business address is required.");
       return;
     }
@@ -199,90 +254,169 @@ export default function EmployerProfilePage() {
     try {
       const {
         data: { user },
+        error: userError,
       } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
 
       if (!user) {
         router.replace("/login");
         return;
       }
 
+      /*
+       * =====================================================
+       * SAVE / UPDATE COMPANY
+       * =====================================================
+       *
+       * owner_id is used as the unique record for each
+       * employer.
+       *
+       * Supabase requires a unique index on owner_id:
+       *
+       * create unique index if not exists
+       * companies_owner_id_unique
+       * on public.companies(owner_id);
+       */
+
       const companyPayload = {
         owner_id: user.id,
-        business_name: businessName.trim(),
+
+        business_name:
+          businessName.trim(),
+
         registration_number:
           registrationNumber.trim() || null,
-        vat_number: vatNumber.trim() || null,
+
+        vat_number:
+          vatNumber.trim() || null,
+
         contact_person:
           contactPerson.trim() || null,
-        email: email.trim().toLowerCase(),
-        mobile: mobile.trim() || null,
+
+        email:
+          email.trim().toLowerCase(),
+
+        mobile:
+          mobile.trim() || null,
+
         country,
-        province: province.trim() || null,
-        city: city.trim(),
-        address: address.trim(),
-        postal_code: postalCode.trim() || null,
-        updated_at: new Date().toISOString(),
+
+        province:
+          province.trim() || null,
+
+        city:
+          city.trim(),
+
+        address:
+          address.trim(),
+
+        postal_code:
+          postalCode.trim() || null,
+
+        updated_at:
+          new Date().toISOString(),
       };
 
-      let newCompanyId = companyId;
+      const {
+        data: companyData,
+        error: companyError,
+      } = await supabase
+        .from("companies")
+        .upsert(companyPayload, {
+          onConflict: "owner_id",
+        })
+        .select("id")
+        .single();
 
-      if (companyId) {
-        const { error } = await supabase
-          .from("companies")
-          .update(companyPayload)
-          .eq("id", companyId);
+      if (companyError) {
+        console.error(
+          "Company save error:",
+          companyError,
+        );
 
-        if (error) {
-          throw error;
-        }
-      } else {
-        const { data, error } = await supabase
-          .from("companies")
-          .insert({
-            ...companyPayload,
-            created_at: new Date().toISOString(),
-          })
-          .select("id")
-          .single();
-
-        if (error) {
-          throw error;
-        }
-
-        newCompanyId = data.id;
-        setCompanyId(data.id);
+        throw companyError;
       }
 
-      const { error: profileError } =
-        await supabase
-          .from("profiles")
-          .update({
-            organisation_name:
-              businessName.trim(),
-            company_id: newCompanyId,
-            role: "employer",
-            account_type: "organisation",
-          })
-          .eq("id", user.id);
+      if (!companyData?.id) {
+        throw new Error(
+          "Company was saved but no company ID was returned.",
+        );
+      }
+
+      const newCompanyId =
+        companyData.id;
+
+      setCompanyId(newCompanyId);
+
+      /*
+       * =====================================================
+       * UPDATE EMPLOYER PROFILE
+       * =====================================================
+       */
+
+      const {
+        error: profileError,
+      } = await supabase
+        .from("profiles")
+        .update({
+          organisation_name:
+            businessName.trim(),
+
+          company_id:
+            newCompanyId,
+
+          role:
+            "employer",
+
+          account_type:
+            "organisation",
+        })
+        .eq("id", user.id);
 
       if (profileError) {
+        console.error(
+          "Profile update error:",
+          profileError,
+        );
+
         throw profileError;
       }
 
       setSaved(true);
+      setMessageType("success");
+
       setMessage(
         "Organisation profile saved successfully.",
       );
-    } catch (error) {
+    } catch (error: any) {
       console.error(
         "Employer profile save error:",
         error,
       );
 
+      setSaved(false);
+      setMessageType("error");
+
+      /*
+       * Show the actual Supabase error instead of
+       * only "Could not save organisation profile".
+       */
+
+      const detailedMessage =
+        error?.message ||
+        error?.details ||
+        error?.hint ||
+        error?.error_description ||
+        (typeof error === "string"
+          ? error
+          : "");
+
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Could not save organisation profile.",
+        detailedMessage ||
+          "Could not save organisation profile.",
       );
     } finally {
       setSaving(false);
@@ -293,11 +427,13 @@ export default function EmployerProfilePage() {
     return (
       <main style={styles.loadingPage}>
         <div style={styles.loadingCard}>
-          <h2>Loading Organisation Profile</h2>
+          <h2>
+            Loading Organisation Profile
+          </h2>
 
           <p style={styles.muted}>
-            Please wait while CareStaffing loads your
-            employer information.
+            Please wait while CareStaffing
+            loads your employer information.
           </p>
         </div>
       </main>
@@ -326,20 +462,41 @@ export default function EmployerProfilePage() {
           </h1>
 
           <p style={styles.heroText}>
-            Complete your employer profile before
-            publishing healthcare shifts.
+            Complete your employer profile
+            before publishing healthcare
+            shifts.
           </p>
         </div>
 
         {message && (
           <div
             style={
-              saved
+              messageType === "success"
                 ? styles.successMessage
                 : styles.errorMessage
             }
           >
             {message}
+          </div>
+        )}
+
+        {saved && (
+          <div style={styles.profileStatus}>
+            <div>
+              <strong>
+                Organisation profile active
+              </strong>
+
+              <p style={styles.statusText}>
+                Your organisation details are
+                saved. You can update them at
+                any time.
+              </p>
+            </div>
+
+            <span style={styles.activeBadge}>
+              ACTIVE
+            </span>
           </div>
         )}
 
@@ -363,6 +520,7 @@ export default function EmployerProfilePage() {
                   }
                   style={styles.input}
                   placeholder="e.g. Palmyra Pharmacy"
+                  required
                 />
               </Field>
 
@@ -375,7 +533,7 @@ export default function EmployerProfilePage() {
                     )
                   }
                   style={styles.input}
-                  placeholder="Company registration number"
+                  placeholder="e.g. 2020/411199/07"
                 />
               </Field>
             </div>
@@ -385,7 +543,9 @@ export default function EmployerProfilePage() {
                 <input
                   value={vatNumber}
                   onChange={(e) =>
-                    setVatNumber(e.target.value)
+                    setVatNumber(
+                      e.target.value,
+                    )
                   }
                   style={styles.input}
                   placeholder="VAT number"
@@ -422,6 +582,7 @@ export default function EmployerProfilePage() {
                   }
                   style={styles.input}
                   placeholder="employer@example.com"
+                  required
                 />
               </Field>
 
@@ -448,10 +609,14 @@ export default function EmployerProfilePage() {
                 <select
                   value={country}
                   onChange={(e) => {
-                    setCountry(e.target.value);
+                    setCountry(
+                      e.target.value,
+                    );
+
                     setProvince("");
                   }}
                   style={styles.input}
+                  required
                 >
                   {countries.map((item) => (
                     <option
@@ -464,12 +629,15 @@ export default function EmployerProfilePage() {
                 </select>
               </Field>
 
-              {country === "South Africa" ? (
+              {country ===
+              "South Africa" ? (
                 <Field label="Province">
                   <select
                     value={province}
                     onChange={(e) =>
-                      setProvince(e.target.value)
+                      setProvince(
+                        e.target.value,
+                      )
                     }
                     style={styles.input}
                   >
@@ -494,7 +662,9 @@ export default function EmployerProfilePage() {
                   <input
                     value={province}
                     onChange={(e) =>
-                      setProvince(e.target.value)
+                      setProvince(
+                        e.target.value,
+                      )
                     }
                     style={styles.input}
                     placeholder="Region / County"
@@ -512,6 +682,7 @@ export default function EmployerProfilePage() {
                   }
                   style={styles.input}
                   placeholder="Cape Town"
+                  required
                 />
               </Field>
 
@@ -533,10 +704,13 @@ export default function EmployerProfilePage() {
               <input
                 value={address}
                 onChange={(e) =>
-                  setAddress(e.target.value)
+                  setAddress(
+                    e.target.value,
+                  )
                 }
                 style={styles.input}
                 placeholder="Full business / branch address"
+                required
               />
             </Field>
           </section>
@@ -554,7 +728,16 @@ export default function EmployerProfilePage() {
               disabled={saving}
               style={{
                 ...styles.saveButton,
-                opacity: saving ? 0.65 : 1,
+
+                opacity:
+                  saving
+                    ? 0.65
+                    : 1,
+
+                cursor:
+                  saving
+                    ? "not-allowed"
+                    : "pointer",
               }}
             >
               {saving
@@ -713,6 +896,7 @@ const styles: Record<
     justifyContent: "flex-end",
     gap: 12,
     flexWrap: "wrap",
+    marginBottom: 40,
   },
 
   cancelButton: {
@@ -729,11 +913,12 @@ const styles: Record<
     padding: "14px 22px",
     borderRadius: 12,
     border: "none",
+
     background:
       "linear-gradient(135deg,#0f766e,#0891b2)",
+
     color: "#ffffff",
     fontWeight: 900,
-    cursor: "pointer",
   },
 
   successMessage: {
@@ -743,6 +928,7 @@ const styles: Record<
     borderRadius: 12,
     marginBottom: 18,
     fontWeight: 700,
+    border: "1px solid #86efac",
   },
 
   errorMessage: {
@@ -752,5 +938,36 @@ const styles: Record<
     borderRadius: 12,
     marginBottom: 18,
     fontWeight: 700,
+    border: "1px solid #fecaca",
+  },
+
+  profileStatus: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 14,
+
+    background: "#ecfdf5",
+    border: "1px solid #a7f3d0",
+    padding: "16px 18px",
+    borderRadius: 16,
+    marginBottom: 18,
+    color: "#065f46",
+  },
+
+  statusText: {
+    margin: "5px 0 0",
+    color: "#047857",
+    fontSize: 14,
+  },
+
+  activeBadge: {
+    background: "#0f766e",
+    color: "#ffffff",
+    padding: "7px 11px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 900,
+    letterSpacing: 0.5,
   },
 };
