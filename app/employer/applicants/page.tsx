@@ -5,36 +5,44 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
 
+type ApplicantProfile = {
+  id: string;
+  first_name: string | null;
+  surname: string | null;
+  email: string | null;
+  mobile: string | null;
+  profession: string | null;
+  registration_number: string | null;
+  city: string | null;
+  country: string | null;
+  profile_photo_url: string | null;
+  cv_url: string | null;
+};
+
+type Shift = {
+  id: string;
+  title: string | null;
+  profession_required: string | null;
+  business_name: string | null;
+  start_date: string | null;
+  city: string | null;
+};
+
 type Application = {
   id: string;
   shift_id: string;
-  applicant_id: string;
+
+  // Your table currently contains BOTH.
+  applicant_id: string | null;
+  locum_id: string | null;
+
   status: string | null;
   message: string | null;
   created_at: string | null;
+  updated_at?: string | null;
 
-  shift?: {
-    id: string;
-    title: string | null;
-    profession_required: string | null;
-    business_name: string | null;
-    start_date: string | null;
-    city: string | null;
-  } | null;
-
-  applicant?: {
-    id: string;
-    first_name: string | null;
-    surname: string | null;
-    email: string | null;
-    mobile: string | null;
-    profession: string | null;
-    registration_number: string | null;
-    city: string | null;
-    country: string | null;
-    profile_photo_url: string | null;
-    cv_url: string | null;
-  } | null;
+  shift?: Shift | null;
+  applicant?: ApplicantProfile | null;
 };
 
 export default function EmployerApplicantsPage() {
@@ -57,24 +65,24 @@ function ApplicantsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const shiftFilter =
-    searchParams.get("shift") || "";
+  const shiftFilter = searchParams.get("shift") || "";
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loading, setLoading] = useState(true);
+  const [applications, setApplications] = useState<Application[]>([]);
 
-  const [applications, setApplications] =
-    useState<Application[]>([]);
-
-  const [message, setMessage] =
-    useState("");
-
+  const [message, setMessage] = useState("");
   const [messageType, setMessageType] =
     useState<"success" | "error" | "">("");
 
   useEffect(() => {
-    loadApplications();
+    void loadApplications();
   }, [shiftFilter]);
+
+  function getApplicantId(
+    application: Pick<Application, "applicant_id" | "locum_id">,
+  ) {
+    return application.applicant_id || application.locum_id || null;
+  }
 
   async function loadApplications() {
     setLoading(true);
@@ -82,6 +90,10 @@ function ApplicantsContent() {
     setMessageType("");
 
     try {
+      // ---------------------------------------------------------
+      // 1. Confirm logged-in employer
+      // ---------------------------------------------------------
+
       const {
         data: { user },
         error: userError,
@@ -92,29 +104,29 @@ function ApplicantsContent() {
         return;
       }
 
-      /*
-       * Get employer's own shifts first.
-       */
+      // ---------------------------------------------------------
+      // 2. Get employer's shifts
+      // ---------------------------------------------------------
+      //
+      // Your current shift-posting workflow uses created_by.
+      // We keep this here so applicants only appear to the employer
+      // who owns the shift.
+      // ---------------------------------------------------------
+
       let shiftsQuery = supabase
         .from("shifts")
-        .select(
-          `
+        .select(`
           id,
           title,
           profession_required,
           business_name,
           start_date,
           city
-        `,
-        )
+        `)
         .eq("created_by", user.id);
 
       if (shiftFilter) {
-        shiftsQuery =
-          shiftsQuery.eq(
-            "id",
-            shiftFilter,
-          );
+        shiftsQuery = shiftsQuery.eq("id", shiftFilter);
       }
 
       const {
@@ -123,23 +135,39 @@ function ApplicantsContent() {
       } = await shiftsQuery;
 
       if (shiftsError) {
-        throw shiftsError;
+        console.error("Employer shifts error:", shiftsError);
+
+        throw new Error(
+          shiftsError.message || "Could not load employer shifts.",
+        );
       }
 
-      const shiftIds =
-        employerShifts?.map(
-          (shift) => shift.id,
-        ) || [];
+      const shifts: Shift[] = employerShifts || [];
+
+      const shiftIds = shifts.map((shift) => shift.id);
+
+      console.log("Employer:", user.id);
+      console.log("Employer shifts:", shifts);
+      console.log("Shift IDs:", shiftIds);
 
       if (shiftIds.length === 0) {
         setApplications([]);
         return;
       }
 
-      /*
-       * Fetch all applications belonging
-       * to the employer's shifts.
-       */
+      // ---------------------------------------------------------
+      // 3. Fetch applications
+      // ---------------------------------------------------------
+      //
+      // IMPORTANT:
+      // Your actual Supabase table contains:
+      //
+      // applicant_id
+      // locum_id
+      //
+      // therefore BOTH are selected.
+      // ---------------------------------------------------------
+
       const {
         data: applicationRows,
         error: applicationsError,
@@ -149,9 +177,11 @@ function ApplicantsContent() {
           id,
           shift_id,
           applicant_id,
+          locum_id,
           status,
           message,
-          created_at
+          created_at,
+          updated_at
         `)
         .in("shift_id", shiftIds)
         .order("created_at", {
@@ -159,21 +189,50 @@ function ApplicantsContent() {
         });
 
       if (applicationsError) {
-        throw applicationsError;
+        console.error(
+          "Shift applications error:",
+          applicationsError,
+        );
+
+        throw new Error(
+          applicationsError.message ||
+            "Could not load shift applications.",
+        );
       }
+
+      console.log(
+        "Applications returned:",
+        applicationRows,
+      );
+
+      // ---------------------------------------------------------
+      // 4. Get all applicant IDs
+      // ---------------------------------------------------------
 
       const applicantIds = [
         ...new Set(
-          (
-            applicationRows || []
-          ).map(
-            (row) =>
-              row.applicant_id,
-          ),
+          (applicationRows || [])
+            .map((application) => {
+              return (
+                application.applicant_id ||
+                application.locum_id ||
+                null
+              );
+            })
+            .filter(Boolean),
         ),
-      ];
+      ] as string[];
 
-      let profiles: any[] = [];
+      console.log(
+        "Applicant profile IDs:",
+        applicantIds,
+      );
+
+      // ---------------------------------------------------------
+      // 5. Fetch applicant profiles
+      // ---------------------------------------------------------
+
+      let profiles: ApplicantProfile[] = [];
 
       if (applicantIds.length > 0) {
         const {
@@ -201,32 +260,54 @@ function ApplicantsContent() {
             "Applicant profiles error:",
             profileError,
           );
+
+          // We do not stop loading the applications here.
+          // Applications can still be displayed even if a profile
+          // has incomplete details.
         } else {
-          profiles =
-            profileRows || [];
+          profiles = profileRows || [];
         }
       }
 
-      const combined: Application[] =
-        (applicationRows || []).map(
-          (application) => ({
-            ...application,
+      console.log(
+        "Applicant profiles returned:",
+        profiles,
+      );
 
-            shift:
-              employerShifts?.find(
-                (shift) =>
-                  shift.id ===
-                  application.shift_id,
-              ) || null,
+      // ---------------------------------------------------------
+      // 6. Combine application + shift + applicant
+      // ---------------------------------------------------------
 
-            applicant:
-              profiles.find(
+      const combined: Application[] = (
+        applicationRows || []
+      ).map((application) => {
+        const applicantId =
+          application.applicant_id ||
+          application.locum_id ||
+          null;
+
+        return {
+          ...application,
+
+          shift:
+            shifts.find(
+              (shift) =>
+                shift.id === application.shift_id,
+            ) || null,
+
+          applicant: applicantId
+            ? profiles.find(
                 (profile) =>
-                  profile.id ===
-                  application.applicant_id,
-              ) || null,
-          }),
-        );
+                  profile.id === applicantId,
+              ) || null
+            : null,
+        };
+      });
+
+      console.log(
+        "Combined applicant records:",
+        combined,
+      );
 
       setApplications(combined);
     } catch (error: any) {
@@ -254,24 +335,40 @@ function ApplicantsContent() {
     setMessageType("");
 
     try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+
       const { error } = await supabase
         .from("shift_applications")
         .update({
           status,
+          updated_at: new Date().toISOString(),
         })
         .eq("id", applicationId);
 
       if (error) {
+        console.error(
+          "Update applicant status error:",
+          error,
+        );
+
         throw error;
       }
 
       setApplications((current) =>
         current.map((application) =>
-          application.id ===
-          applicationId
+          application.id === applicationId
             ? {
                 ...application,
                 status,
+                updated_at:
+                  new Date().toISOString(),
               }
             : application,
         ),
@@ -279,13 +376,17 @@ function ApplicantsContent() {
 
       setMessageType("success");
 
-      setMessage(
-        status === "accepted"
-          ? "Applicant accepted successfully."
-          : status === "declined"
-            ? "Applicant declined."
-            : "Applicant status updated.",
-      );
+      if (status === "accepted") {
+        setMessage(
+          "Applicant accepted successfully.",
+        );
+      } else if (status === "declined") {
+        setMessage("Applicant declined.");
+      } else {
+        setMessage(
+          "Applicant returned to pending.",
+        );
+      }
     } catch (error: any) {
       console.error(
         "Update applicant error:",
@@ -315,16 +416,33 @@ function ApplicantsContent() {
     }`.toUpperCase();
   }
 
-  function formatDate(value?: string | null) {
+  function formatDate(
+    value?: string | null,
+  ) {
     if (!value) return "—";
 
-    return new Date(value).toLocaleDateString(
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+
+    return date.toLocaleDateString(
       "en-ZA",
       {
         day: "2-digit",
         month: "short",
         year: "numeric",
       },
+    );
+  }
+
+  function cleanPhone(
+    value?: string | null,
+  ) {
+    return (value || "").replace(
+      /[^0-9+]/g,
+      "",
     );
   }
 
@@ -336,11 +454,14 @@ function ApplicantsContent() {
             ⏳
           </div>
 
-          <h2>Loading Applicants</h2>
+          <h2>
+            Loading Applicants
+          </h2>
 
           <p style={styles.muted}>
-            Loading healthcare professionals
-            who applied for your shifts...
+            Loading healthcare
+            professionals who applied for
+            your shifts...
           </p>
         </div>
       </main>
@@ -350,6 +471,8 @@ function ApplicantsContent() {
   return (
     <main style={styles.page}>
       <div style={styles.container}>
+        {/* TOP NAV */}
+
         <div style={styles.topBar}>
           <Link
             href="/employer"
@@ -374,6 +497,13 @@ function ApplicantsContent() {
             </Link>
 
             <Link
+              href="/employer/applicants"
+              style={styles.activeNavLink}
+            >
+              Applicants
+            </Link>
+
+            <Link
               href="/employer/profile"
               style={styles.navLink}
             >
@@ -390,6 +520,8 @@ function ApplicantsContent() {
           </div>
         </div>
 
+        {/* HERO */}
+
         <section style={styles.hero}>
           <div>
             <p style={styles.heroLabel}>
@@ -401,8 +533,9 @@ function ApplicantsContent() {
             </h1>
 
             <p style={styles.heroText}>
-              Review healthcare professionals
-              who have applied for your shifts.
+              Review healthcare
+              professionals who have
+              applied for your shifts.
             </p>
           </div>
 
@@ -416,6 +549,8 @@ function ApplicantsContent() {
           )}
         </section>
 
+        {/* MESSAGE */}
+
         {message && (
           <div
             style={
@@ -428,6 +563,8 @@ function ApplicantsContent() {
           </div>
         )}
 
+        {/* EMPTY */}
+
         {applications.length === 0 ? (
           <section style={styles.emptyCard}>
             <div style={styles.emptyIcon}>
@@ -437,8 +574,9 @@ function ApplicantsContent() {
             <h2>No applicants yet</h2>
 
             <p style={styles.muted}>
-              Applications from healthcare
-              professionals will appear here.
+              Applications from
+              healthcare professionals
+              will appear here.
             </p>
 
             <Link
@@ -449,6 +587,8 @@ function ApplicantsContent() {
             </Link>
           </section>
         ) : (
+          /* APPLICATIONS */
+
           <div style={styles.applicationList}>
             {applications.map(
               (application) => {
@@ -458,9 +598,15 @@ function ApplicantsContent() {
                 const shift =
                   application.shift;
 
-                const status =
+                const status = (
                   application.status ||
-                  "pending";
+                  "pending"
+                ).toLowerCase();
+
+                const applicantId =
+                  getApplicantId(
+                    application,
+                  );
 
                 return (
                   <article
@@ -512,9 +658,7 @@ function ApplicantsContent() {
                               applicant?.first_name,
                               applicant?.surname,
                             ]
-                              .filter(
-                                Boolean,
-                              )
+                              .filter(Boolean)
                               .join(" ") ||
                               "Healthcare Professional"}
                           </h2>
@@ -528,6 +672,18 @@ function ApplicantsContent() {
                               shift?.profession_required ||
                               "Healthcare Professional"}
                           </p>
+
+                          {!applicant && (
+                            <p
+                              style={
+                                styles.profileWarning
+                              }
+                            >
+                              Applicant ID:{" "}
+                              {applicantId ||
+                                "Not available"}
+                            </p>
+                          )}
                         </div>
                       </div>
 
@@ -548,12 +704,23 @@ function ApplicantsContent() {
                       </span>
                     </div>
 
-                    <div style={styles.infoGrid}>
+                    <div
+                      style={styles.infoGrid}
+                    >
                       <Info
                         label="Applied For"
                         value={
                           shift?.title ||
                           "Shift"
+                        }
+                      />
+
+                      <Info
+                        label="Profession"
+                        value={
+                          applicant?.profession ||
+                          shift?.profession_required ||
+                          "—"
                         }
                       />
 
@@ -571,7 +738,9 @@ function ApplicantsContent() {
                       <Info
                         label="Location"
                         value={
-                          shift?.city || "—"
+                          shift?.city ||
+                          applicant?.city ||
+                          "—"
                         }
                       />
 
@@ -641,7 +810,9 @@ function ApplicantsContent() {
                       </div>
                     )}
 
-                    <div style={styles.actions}>
+                    <div
+                      style={styles.actions}
+                    >
                       {applicant?.cv_url && (
                         <a
                           href={
@@ -653,30 +824,49 @@ function ApplicantsContent() {
                             styles.secondaryButton
                           }
                         >
-                          View CV
+                          📄 View CV
                         </a>
                       )}
 
-                      <a
-                        href={`mailto:${
-                          applicant?.email ||
-                          ""
-                        }`}
-                        style={
-                          styles.secondaryButton
-                        }
-                      >
-                        Email Applicant
-                      </a>
-
-                      {applicant?.mobile && (
+                      {applicant?.email && (
                         <a
-                          href={`tel:${applicant.mobile}`}
+                          href={`mailto:${applicant.email}`}
                           style={
                             styles.secondaryButton
                           }
                         >
-                          Call Applicant
+                          ✉️ Email Applicant
+                        </a>
+                      )}
+
+                      {applicant?.mobile && (
+                        <a
+                          href={`tel:${cleanPhone(
+                            applicant.mobile,
+                          )}`}
+                          style={
+                            styles.secondaryButton
+                          }
+                        >
+                          📞 Call Applicant
+                        </a>
+                      )}
+
+                      {applicant?.mobile && (
+                        <a
+                          href={`https://wa.me/${cleanPhone(
+                            applicant.mobile,
+                          ).replace(
+                            /^\+/,
+                            "",
+                          )}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={
+                            styles.secondaryButton
+                          }
+                        >
+                          WhatsApp
                         </a>
                       )}
 
@@ -695,7 +885,7 @@ function ApplicantsContent() {
                               styles.acceptButton
                             }
                           >
-                            Accept
+                            ✓ Accept
                           </button>
 
                           <button
@@ -772,7 +962,8 @@ const styles: Record<
     minHeight: "100vh",
     background: "#f1f5f9",
     padding: 24,
-    fontFamily: "Arial, sans-serif",
+    fontFamily:
+      "Arial, sans-serif",
   },
 
   loadingPage: {
@@ -802,7 +993,8 @@ const styles: Record<
 
   topBar: {
     display: "flex",
-    justifyContent: "space-between",
+    justifyContent:
+      "space-between",
     alignItems: "center",
     gap: 15,
     flexWrap: "wrap",
@@ -830,8 +1022,16 @@ const styles: Record<
     fontSize: 14,
   },
 
+  activeNavLink: {
+    color: "#0f766e",
+    textDecoration: "none",
+    fontWeight: 900,
+    fontSize: 14,
+  },
+
   logoutButton: {
-    border: "1px solid #cbd5e1",
+    border:
+      "1px solid #cbd5e1",
     background: "#ffffff",
     color: "#334155",
     padding: "9px 13px",
@@ -848,7 +1048,8 @@ const styles: Record<
     borderRadius: 24,
     marginBottom: 20,
     display: "flex",
-    justifyContent: "space-between",
+    justifyContent:
+      "space-between",
     alignItems: "center",
     gap: 20,
     flexWrap: "wrap",
@@ -860,7 +1061,8 @@ const styles: Record<
     fontWeight: 900,
     letterSpacing: 1,
     fontSize: 13,
-    textTransform: "uppercase",
+    textTransform:
+      "uppercase",
   },
 
   heroTitle: {
@@ -891,12 +1093,14 @@ const styles: Record<
     background: "#ffffff",
     borderRadius: 20,
     padding: 24,
-    border: "1px solid #e2e8f0",
+    border:
+      "1px solid #e2e8f0",
   },
 
   applicationHeader: {
     display: "flex",
-    justifyContent: "space-between",
+    justifyContent:
+      "space-between",
     alignItems: "center",
     gap: 15,
     flexWrap: "wrap",
@@ -913,7 +1117,8 @@ const styles: Record<
     height: 64,
     borderRadius: 999,
     objectFit: "cover",
-    border: "2px solid #ccfbf1",
+    border:
+      "2px solid #ccfbf1",
   },
 
   avatarFallback: {
@@ -936,6 +1141,12 @@ const styles: Record<
   applicantProfession: {
     color: "#64748b",
     margin: "5px 0 0",
+  },
+
+  profileWarning: {
+    color: "#b45309",
+    fontSize: 12,
+    marginTop: 5,
   },
 
   statusBadge: {
@@ -1017,7 +1228,8 @@ const styles: Record<
     color: "#334155",
     padding: "11px 15px",
     borderRadius: 10,
-    border: "1px solid #cbd5e1",
+    border:
+      "1px solid #cbd5e1",
     textDecoration: "none",
     fontWeight: 800,
     cursor: "pointer",
@@ -1038,7 +1250,8 @@ const styles: Record<
     color: "#b91c1c",
     padding: "11px 15px",
     borderRadius: 10,
-    border: "1px solid #fecaca",
+    border:
+      "1px solid #fecaca",
     fontWeight: 800,
     cursor: "pointer",
   },
@@ -1048,7 +1261,8 @@ const styles: Record<
     padding: 40,
     borderRadius: 20,
     textAlign: "center",
-    border: "1px solid #e2e8f0",
+    border:
+      "1px solid #e2e8f0",
   },
 
   emptyIcon: {
