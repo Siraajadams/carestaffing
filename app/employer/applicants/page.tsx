@@ -32,7 +32,6 @@ type Application = {
   id: string;
   shift_id: string;
 
-  // Your table currently contains BOTH.
   applicant_id: string | null;
   locum_id: string | null;
 
@@ -68,21 +67,38 @@ function ApplicantsContent() {
   const shiftFilter = searchParams.get("shift") || "";
 
   const [loading, setLoading] = useState(true);
-  const [applications, setApplications] = useState<Application[]>([]);
+
+  const [applications, setApplications] =
+    useState<Application[]>([]);
 
   const [message, setMessage] = useState("");
+
   const [messageType, setMessageType] =
     useState<"success" | "error" | "">("");
+
+  const [updatingId, setUpdatingId] =
+    useState<string | null>(null);
 
   useEffect(() => {
     void loadApplications();
   }, [shiftFilter]);
 
   function getApplicantId(
-    application: Pick<Application, "applicant_id" | "locum_id">,
+    application: Pick<
+      Application,
+      "applicant_id" | "locum_id"
+    >,
   ) {
-    return application.applicant_id || application.locum_id || null;
+    return (
+      application.applicant_id ||
+      application.locum_id ||
+      null
+    );
   }
+
+  // =========================================================
+  // LOAD APPLICATIONS
+  // =========================================================
 
   async function loadApplications() {
     setLoading(true);
@@ -90,9 +106,9 @@ function ApplicantsContent() {
     setMessageType("");
 
     try {
-      // ---------------------------------------------------------
-      // 1. Confirm logged-in employer
-      // ---------------------------------------------------------
+      // -------------------------------------------------------
+      // 1. Logged-in employer
+      // -------------------------------------------------------
 
       const {
         data: { user },
@@ -104,14 +120,9 @@ function ApplicantsContent() {
         return;
       }
 
-      // ---------------------------------------------------------
-      // 2. Get employer's shifts
-      // ---------------------------------------------------------
-      //
-      // Your current shift-posting workflow uses created_by.
-      // We keep this here so applicants only appear to the employer
-      // who owns the shift.
-      // ---------------------------------------------------------
+      // -------------------------------------------------------
+      // 2. Get employer shifts
+      // -------------------------------------------------------
 
       let shiftsQuery = supabase
         .from("shifts")
@@ -126,7 +137,8 @@ function ApplicantsContent() {
         .eq("created_by", user.id);
 
       if (shiftFilter) {
-        shiftsQuery = shiftsQuery.eq("id", shiftFilter);
+        shiftsQuery =
+          shiftsQuery.eq("id", shiftFilter);
       }
 
       const {
@@ -135,38 +147,41 @@ function ApplicantsContent() {
       } = await shiftsQuery;
 
       if (shiftsError) {
-        console.error("Employer shifts error:", shiftsError);
+        console.error(
+          "Employer shifts error:",
+          shiftsError,
+        );
 
         throw new Error(
-          shiftsError.message || "Could not load employer shifts.",
+          shiftsError.message ||
+            "Could not load employer shifts.",
         );
       }
 
-      const shifts: Shift[] = employerShifts || [];
+      const shifts: Shift[] =
+        employerShifts || [];
 
-      const shiftIds = shifts.map((shift) => shift.id);
+      const shiftIds =
+        shifts.map((shift) => shift.id);
 
-      console.log("Employer:", user.id);
-      console.log("Employer shifts:", shifts);
-      console.log("Shift IDs:", shiftIds);
+      console.log(
+        "Employer:",
+        user.id,
+      );
+
+      console.log(
+        "Employer shifts:",
+        shifts,
+      );
 
       if (shiftIds.length === 0) {
         setApplications([]);
         return;
       }
 
-      // ---------------------------------------------------------
-      // 3. Fetch applications
-      // ---------------------------------------------------------
-      //
-      // IMPORTANT:
-      // Your actual Supabase table contains:
-      //
-      // applicant_id
-      // locum_id
-      //
-      // therefore BOTH are selected.
-      // ---------------------------------------------------------
+      // -------------------------------------------------------
+      // 3. Load applications
+      // -------------------------------------------------------
 
       const {
         data: applicationRows,
@@ -190,7 +205,7 @@ function ApplicantsContent() {
 
       if (applicationsError) {
         console.error(
-          "Shift applications error:",
+          "Application loading error:",
           applicationsError,
         );
 
@@ -200,37 +215,26 @@ function ApplicantsContent() {
         );
       }
 
-      console.log(
-        "Applications returned:",
-        applicationRows,
-      );
-
-      // ---------------------------------------------------------
-      // 4. Get all applicant IDs
-      // ---------------------------------------------------------
+      // -------------------------------------------------------
+      // 4. Find applicant IDs
+      // -------------------------------------------------------
 
       const applicantIds = [
         ...new Set(
           (applicationRows || [])
-            .map((application) => {
-              return (
+            .map(
+              (application) =>
                 application.applicant_id ||
                 application.locum_id ||
-                null
-              );
-            })
+                null,
+            )
             .filter(Boolean),
         ),
       ] as string[];
 
-      console.log(
-        "Applicant profile IDs:",
-        applicantIds,
-      );
-
-      // ---------------------------------------------------------
-      // 5. Fetch applicant profiles
-      // ---------------------------------------------------------
+      // -------------------------------------------------------
+      // 5. Get applicant profiles
+      // -------------------------------------------------------
 
       let profiles: ApplicantProfile[] = [];
 
@@ -260,54 +264,44 @@ function ApplicantsContent() {
             "Applicant profiles error:",
             profileError,
           );
-
-          // We do not stop loading the applications here.
-          // Applications can still be displayed even if a profile
-          // has incomplete details.
         } else {
-          profiles = profileRows || [];
+          profiles =
+            profileRows || [];
         }
       }
 
-      console.log(
-        "Applicant profiles returned:",
-        profiles,
-      );
+      // -------------------------------------------------------
+      // 6. Combine everything
+      // -------------------------------------------------------
 
-      // ---------------------------------------------------------
-      // 6. Combine application + shift + applicant
-      // ---------------------------------------------------------
+      const combined: Application[] =
+        (applicationRows || []).map(
+          (application) => {
+            const applicantId =
+              application.applicant_id ||
+              application.locum_id ||
+              null;
 
-      const combined: Application[] = (
-        applicationRows || []
-      ).map((application) => {
-        const applicantId =
-          application.applicant_id ||
-          application.locum_id ||
-          null;
+            return {
+              ...application,
 
-        return {
-          ...application,
+              shift:
+                shifts.find(
+                  (shift) =>
+                    shift.id ===
+                    application.shift_id,
+                ) || null,
 
-          shift:
-            shifts.find(
-              (shift) =>
-                shift.id === application.shift_id,
-            ) || null,
-
-          applicant: applicantId
-            ? profiles.find(
-                (profile) =>
-                  profile.id === applicantId,
-              ) || null
-            : null,
-        };
-      });
-
-      console.log(
-        "Combined applicant records:",
-        combined,
-      );
+              applicant: applicantId
+                ? profiles.find(
+                    (profile) =>
+                      profile.id ===
+                      applicantId,
+                  ) || null
+                : null,
+            };
+          },
+        );
 
       setApplications(combined);
     } catch (error: any) {
@@ -327,69 +321,155 @@ function ApplicantsContent() {
     }
   }
 
+  // =========================================================
+  // ACCEPT / DECLINE
+  // =========================================================
+
   async function updateApplication(
-    applicationId: string,
-    status: string,
+    application: Application,
+    nextStatus:
+      | "accepted"
+      | "declined"
+      | "pending",
   ) {
     setMessage("");
     setMessageType("");
+    setUpdatingId(application.id);
 
     try {
       const {
         data: { user },
+        error: authError,
       } = await supabase.auth.getUser();
 
-      if (!user) {
+      if (authError || !user) {
         router.replace("/login");
         return;
       }
 
-      const { error } = await supabase
-        .from("shift_applications")
-        .update({
-          status,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", applicationId);
+      const applicantId =
+        getApplicantId(application);
 
-      if (error) {
-        console.error(
-          "Update applicant status error:",
-          error,
+      if (!applicantId) {
+        throw new Error(
+          "This application does not contain an applicant/locum ID.",
         );
-
-        throw error;
       }
 
+      // -------------------------------------------------------
+      // Security check:
+      // ensure this shift belongs to logged-in employer
+      // -------------------------------------------------------
+
+      const {
+        data: ownedShift,
+        error: shiftError,
+      } = await supabase
+        .from("shifts")
+        .select("id")
+        .eq("id", application.shift_id)
+        .eq("created_by", user.id)
+        .maybeSingle();
+
+      if (shiftError) {
+        throw shiftError;
+      }
+
+      if (!ownedShift) {
+        throw new Error(
+          "You do not have permission to manage this application.",
+        );
+      }
+
+      // -------------------------------------------------------
+      // Update application
+      // -------------------------------------------------------
+
+      const now =
+        new Date().toISOString();
+
+      const {
+        data: updatedRows,
+        error: updateError,
+      } = await supabase
+        .from("shift_applications")
+        .update({
+          status: nextStatus,
+          updated_at: now,
+        })
+        .eq("id", application.id)
+        .eq(
+          "shift_id",
+          application.shift_id,
+        )
+        .select(`
+          id,
+          status,
+          updated_at
+        `);
+
+      if (updateError) {
+        console.error(
+          "Update application error:",
+          updateError,
+        );
+
+        throw updateError;
+      }
+
+      if (
+        !updatedRows ||
+        updatedRows.length === 0
+      ) {
+        throw new Error(
+          "The application was not updated. Check the shift_applications RLS update policy.",
+        );
+      }
+
+      // -------------------------------------------------------
+      // Update UI immediately
+      // -------------------------------------------------------
+
       setApplications((current) =>
-        current.map((application) =>
-          application.id === applicationId
+        current.map((item) =>
+          item.id === application.id
             ? {
-                ...application,
-                status,
-                updated_at:
-                  new Date().toISOString(),
+                ...item,
+                status: nextStatus,
+                updated_at: now,
               }
-            : application,
+            : item,
         ),
       );
 
       setMessageType("success");
 
-      if (status === "accepted") {
+      if (
+        nextStatus === "accepted"
+      ) {
         setMessage(
-          "Applicant accepted successfully.",
+          "Applicant accepted. The shift is now activated for this locum and their timesheet is available.",
         );
-      } else if (status === "declined") {
-        setMessage("Applicant declined.");
-      } else {
+      }
+
+      if (
+        nextStatus === "declined"
+      ) {
+        setMessage(
+          "Applicant declined. The shift remains available to other healthcare professionals.",
+        );
+      }
+
+      if (
+        nextStatus === "pending"
+      ) {
         setMessage(
           "Applicant returned to pending.",
         );
       }
     } catch (error: any) {
       console.error(
-        "Update applicant error:",
+        "Applicant status error:",
         error,
       );
 
@@ -397,13 +477,20 @@ function ApplicantsContent() {
 
       setMessage(
         error?.message ||
-          "Could not update applicant.",
+          "Could not update applicant status.",
       );
+    } finally {
+      setUpdatingId(null);
     }
   }
 
+  // =========================================================
+  // LOGOUT
+  // =========================================================
+
   async function logout() {
     await supabase.auth.signOut();
+
     router.replace("/login");
   }
 
@@ -423,7 +510,9 @@ function ApplicantsContent() {
 
     const date = new Date(value);
 
-    if (Number.isNaN(date.getTime())) {
+    if (
+      Number.isNaN(date.getTime())
+    ) {
       return value;
     }
 
@@ -446,11 +535,19 @@ function ApplicantsContent() {
     );
   }
 
+  // =========================================================
+  // LOADING
+  // =========================================================
+
   if (loading) {
     return (
       <main style={styles.loadingPage}>
         <div style={styles.loadingCard}>
-          <div style={{ fontSize: 30 }}>
+          <div
+            style={{
+              fontSize: 30,
+            }}
+          >
             ⏳
           </div>
 
@@ -467,6 +564,10 @@ function ApplicantsContent() {
       </main>
     );
   }
+
+  // =========================================================
+  // UI
+  // =========================================================
 
   return (
     <main style={styles.page}>
@@ -498,7 +599,9 @@ function ApplicantsContent() {
 
             <Link
               href="/employer/applicants"
-              style={styles.activeNavLink}
+              style={
+                styles.activeNavLink
+              }
             >
               Applicants
             </Link>
@@ -513,7 +616,9 @@ function ApplicantsContent() {
             <button
               type="button"
               onClick={logout}
-              style={styles.logoutButton}
+              style={
+                styles.logoutButton
+              }
             >
               Logout
             </button>
@@ -524,25 +629,38 @@ function ApplicantsContent() {
 
         <section style={styles.hero}>
           <div>
-            <p style={styles.heroLabel}>
+            <p
+              style={
+                styles.heroLabel
+              }
+            >
               Employer Portal
             </p>
 
-            <h1 style={styles.heroTitle}>
+            <h1
+              style={
+                styles.heroTitle
+              }
+            >
               Applicants
             </h1>
 
-            <p style={styles.heroText}>
-              Review healthcare
-              professionals who have
-              applied for your shifts.
+            <p
+              style={styles.heroText}
+            >
+              Review and approve
+              healthcare professionals
+              who have applied for your
+              shifts.
             </p>
           </div>
 
           {shiftFilter && (
             <Link
               href="/employer/applicants"
-              style={styles.clearFilter}
+              style={
+                styles.clearFilter
+              }
             >
               Show All Applicants
             </Link>
@@ -554,7 +672,8 @@ function ApplicantsContent() {
         {message && (
           <div
             style={
-              messageType === "success"
+              messageType ===
+              "success"
                 ? styles.successMessage
                 : styles.errorMessage
             }
@@ -565,13 +684,22 @@ function ApplicantsContent() {
 
         {/* EMPTY */}
 
-        {applications.length === 0 ? (
-          <section style={styles.emptyCard}>
-            <div style={styles.emptyIcon}>
+        {applications.length ===
+        0 ? (
+          <section
+            style={styles.emptyCard}
+          >
+            <div
+              style={
+                styles.emptyIcon
+              }
+            >
               👩‍⚕️
             </div>
 
-            <h2>No applicants yet</h2>
+            <h2>
+              No applicants yet
+            </h2>
 
             <p style={styles.muted}>
               Applications from
@@ -581,15 +709,19 @@ function ApplicantsContent() {
 
             <Link
               href="/employer/shifts"
-              style={styles.primaryButton}
+              style={
+                styles.primaryButton
+              }
             >
               View My Shifts
             </Link>
           </section>
         ) : (
-          /* APPLICATIONS */
-
-          <div style={styles.applicationList}>
+          <div
+            style={
+              styles.applicationList
+            }
+          >
             {applications.map(
               (application) => {
                 const applicant =
@@ -608,13 +740,21 @@ function ApplicantsContent() {
                     application,
                   );
 
+                const isUpdating =
+                  updatingId ===
+                  application.id;
+
                 return (
                   <article
-                    key={application.id}
+                    key={
+                      application.id
+                    }
                     style={
                       styles.applicationCard
                     }
                   >
+                    {/* PERSON */}
+
                     <div
                       style={
                         styles.applicationHeader
@@ -644,7 +784,8 @@ function ApplicantsContent() {
                             {initials(
                               applicant?.first_name,
                               applicant?.surname,
-                            ) || "HC"}
+                            ) ||
+                              "HC"}
                           </div>
                         )}
 
@@ -658,8 +799,12 @@ function ApplicantsContent() {
                               applicant?.first_name,
                               applicant?.surname,
                             ]
-                              .filter(Boolean)
-                              .join(" ") ||
+                              .filter(
+                                Boolean,
+                              )
+                              .join(
+                                " ",
+                              ) ||
                               "Healthcare Professional"}
                           </h2>
 
@@ -679,7 +824,8 @@ function ApplicantsContent() {
                                 styles.profileWarning
                               }
                             >
-                              Applicant ID:{" "}
+                              Applicant
+                              ID:{" "}
                               {applicantId ||
                                 "Not available"}
                             </p>
@@ -704,8 +850,74 @@ function ApplicantsContent() {
                       </span>
                     </div>
 
+                    {/* ACCEPTED NOTICE */}
+
+                    {status ===
+                      "accepted" && (
+                      <div
+                        style={
+                          styles.timesheetActive
+                        }
+                      >
+                        <div
+                          style={{
+                            fontSize: 24,
+                          }}
+                        >
+                          ✓
+                        </div>
+
+                        <div>
+                          <strong>
+                            Applicant
+                            Accepted
+                          </strong>
+
+                          <p
+                            style={{
+                              margin:
+                                "4px 0 0",
+                            }}
+                          >
+                            Timesheet
+                            activated for
+                            this shift.
+                            The locum can
+                            now submit
+                            their actual
+                            daily start
+                            and end times.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* DECLINED NOTICE */}
+
+                    {status ===
+                      "declined" && (
+                      <div
+                        style={
+                          styles.declinedNotice
+                        }
+                      >
+                        Applicant
+                        declined. The
+                        posted shift
+                        remains
+                        available for
+                        another
+                        healthcare
+                        professional.
+                      </div>
+                    )}
+
+                    {/* DETAILS */}
+
                     <div
-                      style={styles.infoGrid}
+                      style={
+                        styles.infoGrid
+                      }
                     >
                       <Info
                         label="Applied For"
@@ -788,6 +1000,8 @@ function ApplicantsContent() {
                       />
                     </div>
 
+                    {/* APPLICANT MESSAGE */}
+
                     {application.message && (
                       <div
                         style={
@@ -795,7 +1009,8 @@ function ApplicantsContent() {
                         }
                       >
                         <strong>
-                          Applicant Message
+                          Applicant
+                          Message
                         </strong>
 
                         <p
@@ -810,8 +1025,12 @@ function ApplicantsContent() {
                       </div>
                     )}
 
+                    {/* ACTIONS */}
+
                     <div
-                      style={styles.actions}
+                      style={
+                        styles.actions
+                      }
                     >
                       {applicant?.cv_url && (
                         <a
@@ -835,7 +1054,7 @@ function ApplicantsContent() {
                             styles.secondaryButton
                           }
                         >
-                          ✉️ Email Applicant
+                          ✉️ Email
                         </a>
                       )}
 
@@ -848,7 +1067,7 @@ function ApplicantsContent() {
                             styles.secondaryButton
                           }
                         >
-                          📞 Call Applicant
+                          📞 Call
                         </a>
                       )}
 
@@ -870,48 +1089,107 @@ function ApplicantsContent() {
                         </a>
                       )}
 
+                      {/* PENDING */}
+
                       {status ===
                         "pending" && (
                         <>
                           <button
                             type="button"
+                            disabled={
+                              isUpdating
+                            }
                             onClick={() =>
                               updateApplication(
-                                application.id,
+                                application,
                                 "accepted",
                               )
                             }
-                            style={
-                              styles.acceptButton
-                            }
+                            style={{
+                              ...styles.acceptButton,
+                              opacity:
+                                isUpdating
+                                  ? 0.6
+                                  : 1,
+                            }}
                           >
-                            ✓ Accept
+                            {isUpdating
+                              ? "Updating..."
+                              : "✓ Accept Applicant"}
                           </button>
 
                           <button
                             type="button"
+                            disabled={
+                              isUpdating
+                            }
                             onClick={() =>
                               updateApplication(
-                                application.id,
+                                application,
                                 "declined",
                               )
                             }
-                            style={
-                              styles.declineButton
-                            }
+                            style={{
+                              ...styles.declineButton,
+                              opacity:
+                                isUpdating
+                                  ? 0.6
+                                  : 1,
+                            }}
                           >
-                            Decline
+                            ✕ Decline
+                            Applicant
                           </button>
                         </>
                       )}
 
-                      {status !==
-                        "pending" && (
+                      {/* ACCEPTED */}
+
+                      {status ===
+                        "accepted" && (
+                        <>
+                          <Link
+                            href={`/employer/shifts?shift=${application.shift_id}`}
+                            style={
+                              styles.secondaryButton
+                            }
+                          >
+                            View Shift
+                          </Link>
+
+                          <button
+                            type="button"
+                            disabled={
+                              isUpdating
+                            }
+                            onClick={() =>
+                              updateApplication(
+                                application,
+                                "pending",
+                              )
+                            }
+                            style={
+                              styles.secondaryButton
+                            }
+                          >
+                            Return to
+                            Pending
+                          </button>
+                        </>
+                      )}
+
+                      {/* DECLINED */}
+
+                      {status ===
+                        "declined" && (
                         <button
                           type="button"
+                          disabled={
+                            isUpdating
+                          }
                           onClick={() =>
                             updateApplication(
-                              application.id,
+                              application,
                               "pending",
                             )
                           }
@@ -919,7 +1197,8 @@ function ApplicantsContent() {
                             styles.secondaryButton
                           }
                         >
-                          Return to Pending
+                          Return to
+                          Pending
                         </button>
                       )}
                     </div>
@@ -943,11 +1222,15 @@ function Info({
 }) {
   return (
     <div style={styles.infoItem}>
-      <span style={styles.infoLabel}>
+      <span
+        style={styles.infoLabel}
+      >
         {label}
       </span>
 
-      <strong style={styles.infoValue}>
+      <strong
+        style={styles.infoValue}
+      >
         {value}
       </strong>
     </div>
@@ -1171,6 +1454,29 @@ const styles: Record<
     color: "#991b1b",
   },
 
+  timesheetActive: {
+    marginTop: 18,
+    padding: 16,
+    borderRadius: 14,
+    display: "flex",
+    gap: 12,
+    alignItems: "flex-start",
+    background: "#dcfce7",
+    color: "#166534",
+    border:
+      "1px solid #bbf7d0",
+  },
+
+  declinedNotice: {
+    marginTop: 18,
+    padding: 15,
+    borderRadius: 12,
+    background: "#fff7ed",
+    color: "#9a3412",
+    border:
+      "1px solid #fed7aa",
+  },
+
   infoGrid: {
     display: "grid",
     gridTemplateColumns:
@@ -1238,21 +1544,21 @@ const styles: Record<
   acceptButton: {
     background: "#0f766e",
     color: "#ffffff",
-    padding: "11px 15px",
+    padding: "11px 16px",
     borderRadius: 10,
     border: "none",
-    fontWeight: 800,
+    fontWeight: 900,
     cursor: "pointer",
   },
 
   declineButton: {
     background: "#fff1f2",
     color: "#b91c1c",
-    padding: "11px 15px",
+    padding: "11px 16px",
     borderRadius: 10,
     border:
       "1px solid #fecaca",
-    fontWeight: 800,
+    fontWeight: 900,
     cursor: "pointer",
   },
 
