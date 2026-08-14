@@ -173,13 +173,17 @@ export default function InvoicesPage() {
     return rate * hours;
   }
 
-  function getPlatformFee(item: Timesheet) {
-    return getGrossAmount(item) * 0.1;
-  }
-
   function getLocumAmount(item: Timesheet) {
-    return getGrossAmount(item) - getPlatformFee(item);
-  }
+  return getGrossAmount(item);
+}
+
+function getPlatformFee(item: Timesheet) {
+  return getLocumAmount(item) * 0.1;
+}
+
+function getEmployerTotal(item: Timesheet) {
+  return getLocumAmount(item) + getPlatformFee(item);
+}
 
   function invoiceNumber(item: Timesheet) {
     const date =
