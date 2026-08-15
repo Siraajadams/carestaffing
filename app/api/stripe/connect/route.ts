@@ -213,22 +213,20 @@ export async function POST(req: NextRequest) {
     } else {
       const account = await stripe.accounts.retrieve(accountId);
 
-      if (!account.deleted) {
-        const requirementsComplete =
-          account.details_submitted &&
-          (!account.requirements?.currently_due ||
-            account.requirements.currently_due.length === 0);
+const requirementsComplete =
+  account.details_submitted &&
+  (!account.requirements?.currently_due ||
+    account.requirements.currently_due.length === 0);
 
-        await supabase
-          .from("profiles")
-          .update({
-            stripe_onboarding_complete: Boolean(requirementsComplete),
-            stripe_charges_enabled: Boolean(account.charges_enabled),
-            stripe_payouts_enabled: Boolean(account.payouts_enabled),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", user.id);
-      }
+await supabase
+  .from("profiles")
+  .update({
+    stripe_onboarding_complete: Boolean(requirementsComplete),
+    stripe_charges_enabled: Boolean(account.charges_enabled),
+    stripe_payouts_enabled: Boolean(account.payouts_enabled),
+    updated_at: new Date().toISOString(),
+  })
+  .eq("id", user.id);
     }
 
     const body = await req.json().catch(() => ({}));
