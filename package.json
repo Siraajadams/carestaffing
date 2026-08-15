@@ -10,7 +10,8 @@
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "openai": "latest"
+    "openai": "latest",
+    "stripe": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
