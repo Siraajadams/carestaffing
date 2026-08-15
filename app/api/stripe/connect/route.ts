@@ -267,7 +267,7 @@ export async function POST(req: NextRequest) {
           error instanceof Error
             ? error.message
             : "Could not create Stripe Connect onboarding link.",
-      },
+        },
       { status: 500 }
     );
   }
