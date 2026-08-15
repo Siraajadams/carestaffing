@@ -225,13 +225,6 @@ export async function POST(req: NextRequest) {
       locumProfile.stripe_account_id
     );
 
-    if (connectedAccount.deleted) {
-      return NextResponse.json(
-        { error: "The locum Stripe account is no longer available." },
-        { status: 400 }
-      );
-    }
-
     if (!connectedAccount.payouts_enabled) {
       return NextResponse.json(
         {
