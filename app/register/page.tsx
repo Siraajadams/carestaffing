@@ -425,7 +425,7 @@ export default function RegisterPage() {
                 <option>Pharmacist - PCDT Permit</option>
                 <option>Pharmacist - PCDT & PIMART Permit</option>
                 <option>Independent Prescriber</option>
-                <option>Optometrist</option>
+                <option>biokineticist</option>
               </select>
 
               <input
