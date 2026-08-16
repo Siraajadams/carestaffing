@@ -1520,10 +1520,10 @@ const styles: Record<
   },
 
   errorMessage: {
-    background: "#fee2e2",
-    color: "#991b1b",
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 18,
-  },
-;
+  background: "#fee2e2",
+  color: "#991b1b",
+  padding: 14,
+  borderRadius: 12,
+  marginBottom: 18,
+},
+};
