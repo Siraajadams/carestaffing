@@ -1,4 +1,4 @@
-"use client";
+}"use client";
 
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
@@ -18,6 +18,8 @@ type ApplicantProfile = {
   profile_photo_url: string | null;
   cv_url: string | null;
 };
+
+type RawProfile = Record<string, any>;
 
 type Shift = {
   id: string;
@@ -67,15 +69,10 @@ function ApplicantsContent() {
   const shiftFilter = searchParams.get("shift") || "";
 
   const [loading, setLoading] = useState(true);
-
-  const [applications, setApplications] =
-    useState<Application[]>([]);
-
+  const [applications, setApplications] = useState<Application[]>([]);
   const [message, setMessage] = useState("");
-
   const [messageType, setMessageType] =
     useState<"success" | "error" | "">("");
-
   const [updatingId, setUpdatingId] =
     useState<string | null>(null);
 
@@ -84,16 +81,56 @@ function ApplicantsContent() {
   }, [shiftFilter]);
 
   function getApplicantId(
-    application: Pick<
-      Application,
-      "applicant_id" | "locum_id"
-    >,
+    application: Pick<Application, "applicant_id" | "locum_id">,
   ) {
     return (
       application.applicant_id ||
       application.locum_id ||
       null
     );
+  }
+
+  function normalizeProfile(row: RawProfile): ApplicantProfile {
+    return {
+      id: String(row.id || ""),
+      first_name:
+        row.first_name ??
+        row.firstname ??
+        null,
+      surname:
+        row.surname ??
+        row.last_name ??
+        null,
+      email:
+        row.email ??
+        null,
+      mobile:
+        row.mobile ??
+        row.mobile_number ??
+        row.phone ??
+        null,
+      profession:
+        row.profession ??
+        null,
+      registration_number:
+        row.registration_number ??
+        row.professional_registration_number ??
+        row.hpcsa ??
+        null,
+      city:
+        row.city ??
+        row.city_area ??
+        null,
+      country:
+        row.country ??
+        null,
+      profile_photo_url:
+        row.profile_photo_url ??
+        null,
+      cv_url:
+        row.cv_url ??
+        null,
+    };
   }
 
   // =========================================================
@@ -137,8 +174,7 @@ function ApplicantsContent() {
         .eq("created_by", user.id);
 
       if (shiftFilter) {
-        shiftsQuery =
-          shiftsQuery.eq("id", shiftFilter);
+        shiftsQuery = shiftsQuery.eq("id", shiftFilter);
       }
 
       const {
@@ -147,10 +183,7 @@ function ApplicantsContent() {
       } = await shiftsQuery;
 
       if (shiftsError) {
-        console.error(
-          "Employer shifts error:",
-          shiftsError,
-        );
+        console.error("Employer shifts error:", shiftsError);
 
         throw new Error(
           shiftsError.message ||
@@ -158,21 +191,11 @@ function ApplicantsContent() {
         );
       }
 
-      const shifts: Shift[] =
-        employerShifts || [];
+      const shifts: Shift[] = employerShifts || [];
+      const shiftIds = shifts.map((shift) => shift.id);
 
-      const shiftIds =
-        shifts.map((shift) => shift.id);
-
-      console.log(
-        "Employer:",
-        user.id,
-      );
-
-      console.log(
-        "Employer shifts:",
-        shifts,
-      );
+      console.log("Employer:", user.id);
+      console.log("Employer shifts:", shifts);
 
       if (shiftIds.length === 0) {
         setApplications([]);
@@ -232,8 +255,26 @@ function ApplicantsContent() {
         ),
       ] as string[];
 
+      console.log("Applicant IDs:", applicantIds);
+
       // -------------------------------------------------------
       // 5. Get applicant profiles
+      //
+      // IMPORTANT:
+      // Use select("*") so this page works with BOTH old and new
+      // CareStaffing profile column names.
+      //
+      // Old registration code used:
+      //   mobile_number
+      //   professional_registration_number
+      //   city_area
+      //
+      // New profile page uses:
+      //   mobile
+      //   registration_number
+      //   city
+      //
+      // normalizeProfile() handles both.
       // -------------------------------------------------------
 
       let profiles: ApplicantProfile[] = [];
@@ -244,19 +285,7 @@ function ApplicantsContent() {
           error: profileError,
         } = await supabase
           .from("profiles")
-          .select(`
-            id,
-            first_name,
-            surname,
-            email,
-            mobile,
-            profession,
-            registration_number,
-            city,
-            country,
-            profile_photo_url,
-            cv_url
-          `)
+          .select("*")
           .in("id", applicantIds);
 
         if (profileError) {
@@ -264,9 +293,28 @@ function ApplicantsContent() {
             "Applicant profiles error:",
             profileError,
           );
-        } else {
-          profiles =
-            profileRows || [];
+
+          throw new Error(
+            `Could not load applicant profile details: ${profileError.message}`,
+          );
+        }
+
+        profiles = (profileRows || []).map(
+          (row: RawProfile) => normalizeProfile(row),
+        );
+
+        console.log("Applicant profiles:", profiles);
+
+        // If Supabase returns zero rows even though IDs exist,
+        // this usually means the profiles SELECT RLS policy is
+        // preventing employers from reading worker profiles.
+        if (
+          applicantIds.length > 0 &&
+          profiles.length === 0
+        ) {
+          console.warn(
+            "Applications were found, but no matching profile rows were returned. Check profiles table RLS SELECT policy for employer access.",
+          );
         }
       }
 
@@ -295,13 +343,17 @@ function ApplicantsContent() {
               applicant: applicantId
                 ? profiles.find(
                     (profile) =>
-                      profile.id ===
-                      applicantId,
+                      profile.id === applicantId,
                   ) || null
                 : null,
             };
           },
         );
+
+      console.log(
+        "Combined applicant records:",
+        combined,
+      );
 
       setApplications(combined);
     } catch (error: any) {
@@ -385,8 +437,7 @@ function ApplicantsContent() {
       // Update application
       // -------------------------------------------------------
 
-      const now =
-        new Date().toISOString();
+      const now = new Date().toISOString();
 
       const {
         data: updatedRows,
@@ -444,25 +495,19 @@ function ApplicantsContent() {
 
       setMessageType("success");
 
-      if (
-        nextStatus === "accepted"
-      ) {
+      if (nextStatus === "accepted") {
         setMessage(
           "Applicant approved. The shift is now activated for this locum and their timesheet is available.",
         );
       }
 
-      if (
-        nextStatus === "declined"
-      ) {
+      if (nextStatus === "declined") {
         setMessage(
           "Applicant declined. The shift remains available to other healthcare professionals.",
         );
       }
 
-      if (
-        nextStatus === "pending"
-      ) {
+      if (nextStatus === "pending") {
         setMessage(
           "Applicant returned to pending.",
         );
@@ -490,7 +535,6 @@ function ApplicantsContent() {
 
   async function logout() {
     await supabase.auth.signOut();
-
     router.replace("/login");
   }
 
@@ -510,9 +554,7 @@ function ApplicantsContent() {
 
     const date = new Date(value);
 
-    if (
-      Number.isNaN(date.getTime())
-    ) {
+    if (Number.isNaN(date.getTime())) {
       return value;
     }
 
@@ -543,17 +585,11 @@ function ApplicantsContent() {
     return (
       <main style={styles.loadingPage}>
         <div style={styles.loadingCard}>
-          <div
-            style={{
-              fontSize: 30,
-            }}
-          >
+          <div style={{ fontSize: 30 }}>
             ⏳
           </div>
 
-          <h2>
-            Loading Applicants
-          </h2>
+          <h2>Loading Applicants</h2>
 
           <p style={styles.muted}>
             Loading healthcare
@@ -599,9 +635,7 @@ function ApplicantsContent() {
 
             <Link
               href="/employer/applicants"
-              style={
-                styles.activeNavLink
-              }
+              style={styles.activeNavLink}
             >
               Applicants
             </Link>
@@ -616,9 +650,7 @@ function ApplicantsContent() {
             <button
               type="button"
               onClick={logout}
-              style={
-                styles.logoutButton
-              }
+              style={styles.logoutButton}
             >
               Logout
             </button>
@@ -629,25 +661,15 @@ function ApplicantsContent() {
 
         <section style={styles.hero}>
           <div>
-            <p
-              style={
-                styles.heroLabel
-              }
-            >
+            <p style={styles.heroLabel}>
               Employer Portal
             </p>
 
-            <h1
-              style={
-                styles.heroTitle
-              }
-            >
+            <h1 style={styles.heroTitle}>
               Applicants
             </h1>
 
-            <p
-              style={styles.heroText}
-            >
+            <p style={styles.heroText}>
               Review and approve
               healthcare professionals
               who have applied for your
@@ -658,9 +680,7 @@ function ApplicantsContent() {
           {shiftFilter && (
             <Link
               href="/employer/applicants"
-              style={
-                styles.clearFilter
-              }
+              style={styles.clearFilter}
             >
               Show All Applicants
             </Link>
@@ -672,8 +692,7 @@ function ApplicantsContent() {
         {message && (
           <div
             style={
-              messageType ===
-              "success"
+              messageType === "success"
                 ? styles.successMessage
                 : styles.errorMessage
             }
@@ -684,22 +703,13 @@ function ApplicantsContent() {
 
         {/* EMPTY */}
 
-        {applications.length ===
-        0 ? (
-          <section
-            style={styles.emptyCard}
-          >
-            <div
-              style={
-                styles.emptyIcon
-              }
-            >
+        {applications.length === 0 ? (
+          <section style={styles.emptyCard}>
+            <div style={styles.emptyIcon}>
               👩‍⚕️
             </div>
 
-            <h2>
-              No applicants yet
-            </h2>
+            <h2>No applicants yet</h2>
 
             <p style={styles.muted}>
               Applications from
@@ -709,19 +719,13 @@ function ApplicantsContent() {
 
             <Link
               href="/employer/shifts"
-              style={
-                styles.primaryButton
-              }
+              style={styles.primaryButton}
             >
               View My Shifts
             </Link>
           </section>
         ) : (
-          <div
-            style={
-              styles.applicationList
-            }
-          >
+          <div style={styles.applicationList}>
             {applications.map(
               (application) => {
                 const applicant =
@@ -735,9 +739,7 @@ function ApplicantsContent() {
                   "pending"
                 ).toLowerCase();
 
-                // Existing applications may be stored as "applied".
-                // Treat them as pending so the employer can approve/decline them.
-                // Also normalize older alternative status names if they exist.
+                // Existing "applied" records are shown as pending.
                 const status =
                   rawStatus === "applied"
                     ? "pending"
@@ -748,9 +750,7 @@ function ApplicantsContent() {
                         : rawStatus;
 
                 const applicantId =
-                  getApplicantId(
-                    application,
-                  );
+                  getApplicantId(application);
 
                 const isUpdating =
                   updatingId ===
@@ -758,9 +758,7 @@ function ApplicantsContent() {
 
                 return (
                   <article
-                    key={
-                      application.id
-                    }
+                    key={application.id}
                     style={
                       styles.applicationCard
                     }
@@ -783,9 +781,7 @@ function ApplicantsContent() {
                               applicant.profile_photo_url
                             }
                             alt="Applicant profile"
-                            style={
-                              styles.avatar
-                            }
+                            style={styles.avatar}
                           />
                         ) : (
                           <div
@@ -796,8 +792,7 @@ function ApplicantsContent() {
                             {initials(
                               applicant?.first_name,
                               applicant?.surname,
-                            ) ||
-                              "HC"}
+                            ) || "HC"}
                           </div>
                         )}
 
@@ -811,12 +806,8 @@ function ApplicantsContent() {
                               applicant?.first_name,
                               applicant?.surname,
                             ]
-                              .filter(
-                                Boolean,
-                              )
-                              .join(
-                                " ",
-                              ) ||
+                              .filter(Boolean)
+                              .join(" ") ||
                               "Healthcare Professional"}
                           </h2>
 
@@ -836,8 +827,7 @@ function ApplicantsContent() {
                                 styles.profileWarning
                               }
                             >
-                              Applicant
-                              ID:{" "}
+                              Applicant ID:{" "}
                               {applicantId ||
                                 "Not available"}
                             </p>
@@ -848,12 +838,9 @@ function ApplicantsContent() {
                       <span
                         style={{
                           ...styles.statusBadge,
-
-                          ...(status ===
-                          "accepted"
+                          ...(status === "accepted"
                             ? styles.accepted
-                            : status ===
-                                "declined"
+                            : status === "declined"
                               ? styles.declined
                               : styles.pending),
                         }}
@@ -864,41 +851,30 @@ function ApplicantsContent() {
 
                     {/* ACCEPTED NOTICE */}
 
-                    {status ===
-                      "accepted" && (
+                    {status === "accepted" && (
                       <div
                         style={
                           styles.timesheetActive
                         }
                       >
-                        <div
-                          style={{
-                            fontSize: 24,
-                          }}
-                        >
+                        <div style={{ fontSize: 24 }}>
                           ✓
                         </div>
 
                         <div>
                           <strong>
-                            Applicant
-                            Approved
+                            Applicant Approved
                           </strong>
 
                           <p
                             style={{
-                              margin:
-                                "4px 0 0",
+                              margin: "4px 0 0",
                             }}
                           >
-                            Timesheet
-                            activated for
-                            this shift.
-                            The locum can
-                            now submit
-                            their actual
-                            daily start
-                            and end times.
+                            Timesheet activated for
+                            this shift. The locum can
+                            now submit their actual
+                            daily start and end times.
                           </p>
                         </div>
                       </div>
@@ -906,31 +882,22 @@ function ApplicantsContent() {
 
                     {/* DECLINED NOTICE */}
 
-                    {status ===
-                      "declined" && (
+                    {status === "declined" && (
                       <div
                         style={
                           styles.declinedNotice
                         }
                       >
-                        Applicant
-                        declined. The
-                        posted shift
-                        remains
-                        available for
-                        another
-                        healthcare
+                        Applicant declined. The posted
+                        shift remains available for
+                        another healthcare
                         professional.
                       </div>
                     )}
 
                     {/* DETAILS */}
 
-                    <div
-                      style={
-                        styles.infoGrid
-                      }
-                    >
+                    <div style={styles.infoGrid}>
                       <Info
                         label="Applied For"
                         value={
@@ -1021,8 +988,7 @@ function ApplicantsContent() {
                         }
                       >
                         <strong>
-                          Applicant
-                          Message
+                          Applicant Message
                         </strong>
 
                         <p
@@ -1030,25 +996,17 @@ function ApplicantsContent() {
                             marginBottom: 0,
                           }}
                         >
-                          {
-                            application.message
-                          }
+                          {application.message}
                         </p>
                       </div>
                     )}
 
                     {/* ACTIONS */}
 
-                    <div
-                      style={
-                        styles.actions
-                      }
-                    >
+                    <div style={styles.actions}>
                       {applicant?.cv_url && (
                         <a
-                          href={
-                            applicant.cv_url
-                          }
+                          href={applicant.cv_url}
                           target="_blank"
                           rel="noreferrer"
                           style={
@@ -1087,10 +1045,7 @@ function ApplicantsContent() {
                         <a
                           href={`https://wa.me/${cleanPhone(
                             applicant.mobile,
-                          ).replace(
-                            /^\+/,
-                            "",
-                          )}`}
+                          ).replace(/^\+/, "")}`}
                           target="_blank"
                           rel="noreferrer"
                           style={
@@ -1103,14 +1058,11 @@ function ApplicantsContent() {
 
                       {/* PENDING */}
 
-                      {status ===
-                        "pending" && (
+                      {status === "pending" && (
                         <>
                           <button
                             type="button"
-                            disabled={
-                              isUpdating
-                            }
+                            disabled={isUpdating}
                             onClick={() =>
                               updateApplication(
                                 application,
@@ -1119,10 +1071,9 @@ function ApplicantsContent() {
                             }
                             style={{
                               ...styles.acceptButton,
-                              opacity:
-                                isUpdating
-                                  ? 0.6
-                                  : 1,
+                              opacity: isUpdating
+                                ? 0.6
+                                : 1,
                             }}
                           >
                             {isUpdating
@@ -1132,9 +1083,7 @@ function ApplicantsContent() {
 
                           <button
                             type="button"
-                            disabled={
-                              isUpdating
-                            }
+                            disabled={isUpdating}
                             onClick={() =>
                               updateApplication(
                                 application,
@@ -1143,10 +1092,9 @@ function ApplicantsContent() {
                             }
                             style={{
                               ...styles.declineButton,
-                              opacity:
-                                isUpdating
-                                  ? 0.6
-                                  : 1,
+                              opacity: isUpdating
+                                ? 0.6
+                                : 1,
                             }}
                           >
                             {isUpdating
@@ -1158,8 +1106,7 @@ function ApplicantsContent() {
 
                       {/* ACCEPTED */}
 
-                      {status ===
-                        "accepted" && (
+                      {status === "accepted" && (
                         <>
                           <Link
                             href={`/employer/shifts?shift=${application.shift_id}`}
@@ -1172,9 +1119,7 @@ function ApplicantsContent() {
 
                           <button
                             type="button"
-                            disabled={
-                              isUpdating
-                            }
+                            disabled={isUpdating}
                             onClick={() =>
                               updateApplication(
                                 application,
@@ -1185,21 +1130,17 @@ function ApplicantsContent() {
                               styles.secondaryButton
                             }
                           >
-                            Return to
-                            Pending
+                            Return to Pending
                           </button>
                         </>
                       )}
 
                       {/* DECLINED */}
 
-                      {status ===
-                        "declined" && (
+                      {status === "declined" && (
                         <button
                           type="button"
-                          disabled={
-                            isUpdating
-                          }
+                          disabled={isUpdating}
                           onClick={() =>
                             updateApplication(
                               application,
@@ -1210,8 +1151,7 @@ function ApplicantsContent() {
                             styles.secondaryButton
                           }
                         >
-                          Return to
-                          Pending
+                          Return to Pending
                         </button>
                       )}
                     </div>
@@ -1235,15 +1175,11 @@ function Info({
 }) {
   return (
     <div style={styles.infoItem}>
-      <span
-        style={styles.infoLabel}
-      >
+      <span style={styles.infoLabel}>
         {label}
       </span>
 
-      <strong
-        style={styles.infoValue}
-      >
+      <strong style={styles.infoValue}>
         {value}
       </strong>
     </div>
@@ -1258,8 +1194,7 @@ const styles: Record<
     minHeight: "100vh",
     background: "#f1f5f9",
     padding: 24,
-    fontFamily:
-      "Arial, sans-serif",
+    fontFamily: "Arial, sans-serif",
   },
 
   loadingPage: {
@@ -1289,8 +1224,7 @@ const styles: Record<
 
   topBar: {
     display: "flex",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     alignItems: "center",
     gap: 15,
     flexWrap: "wrap",
@@ -1326,8 +1260,7 @@ const styles: Record<
   },
 
   logoutButton: {
-    border:
-      "1px solid #cbd5e1",
+    border: "1px solid #cbd5e1",
     background: "#ffffff",
     color: "#334155",
     padding: "9px 13px",
@@ -1344,8 +1277,7 @@ const styles: Record<
     borderRadius: 24,
     marginBottom: 20,
     display: "flex",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     alignItems: "center",
     gap: 20,
     flexWrap: "wrap",
@@ -1357,8 +1289,7 @@ const styles: Record<
     fontWeight: 900,
     letterSpacing: 1,
     fontSize: 13,
-    textTransform:
-      "uppercase",
+    textTransform: "uppercase",
   },
 
   heroTitle: {
@@ -1389,14 +1320,12 @@ const styles: Record<
     background: "#ffffff",
     borderRadius: 20,
     padding: 24,
-    border:
-      "1px solid #e2e8f0",
+    border: "1px solid #e2e8f0",
   },
 
   applicationHeader: {
     display: "flex",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     alignItems: "center",
     gap: 15,
     flexWrap: "wrap",
@@ -1413,8 +1342,7 @@ const styles: Record<
     height: 64,
     borderRadius: 999,
     objectFit: "cover",
-    border:
-      "2px solid #ccfbf1",
+    border: "2px solid #ccfbf1",
   },
 
   avatarFallback: {
@@ -1476,8 +1404,7 @@ const styles: Record<
     alignItems: "flex-start",
     background: "#dcfce7",
     color: "#166534",
-    border:
-      "1px solid #bbf7d0",
+    border: "1px solid #bbf7d0",
   },
 
   declinedNotice: {
@@ -1486,8 +1413,7 @@ const styles: Record<
     borderRadius: 12,
     background: "#fff7ed",
     color: "#9a3412",
-    border:
-      "1px solid #fed7aa",
+    border: "1px solid #fed7aa",
   },
 
   infoGrid: {
@@ -1547,8 +1473,7 @@ const styles: Record<
     color: "#334155",
     padding: "11px 15px",
     borderRadius: 10,
-    border:
-      "1px solid #cbd5e1",
+    border: "1px solid #cbd5e1",
     textDecoration: "none",
     fontWeight: 800,
     cursor: "pointer",
@@ -1569,8 +1494,7 @@ const styles: Record<
     color: "#b91c1c",
     padding: "11px 16px",
     borderRadius: 10,
-    border:
-      "1px solid #fecaca",
+    border: "1px solid #fecaca",
     fontWeight: 900,
     cursor: "pointer",
   },
@@ -1580,8 +1504,7 @@ const styles: Record<
     padding: 40,
     borderRadius: 20,
     textAlign: "center",
-    border:
-      "1px solid #e2e8f0",
+    border: "1px solid #e2e8f0",
   },
 
   emptyIcon: {
@@ -1603,4 +1526,4 @@ const styles: Record<
     borderRadius: 12,
     marginBottom: 18,
   },
-};
+;
