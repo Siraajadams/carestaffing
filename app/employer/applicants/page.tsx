@@ -448,7 +448,7 @@ function ApplicantsContent() {
         nextStatus === "accepted"
       ) {
         setMessage(
-          "Applicant accepted. The shift is now activated for this locum and their timesheet is available.",
+          "Applicant approved. The shift is now activated for this locum and their timesheet is available.",
         );
       }
 
@@ -730,10 +730,22 @@ function ApplicantsContent() {
                 const shift =
                   application.shift;
 
-                const status = (
+                const rawStatus = (
                   application.status ||
                   "pending"
                 ).toLowerCase();
+
+                // Existing applications may be stored as "applied".
+                // Treat them as pending so the employer can approve/decline them.
+                // Also normalize older alternative status names if they exist.
+                const status =
+                  rawStatus === "applied"
+                    ? "pending"
+                    : rawStatus === "approved"
+                      ? "accepted"
+                      : rawStatus === "rejected"
+                        ? "declined"
+                        : rawStatus;
 
                 const applicantId =
                   getApplicantId(
@@ -870,7 +882,7 @@ function ApplicantsContent() {
                         <div>
                           <strong>
                             Applicant
-                            Accepted
+                            Approved
                           </strong>
 
                           <p
@@ -1115,7 +1127,7 @@ function ApplicantsContent() {
                           >
                             {isUpdating
                               ? "Updating..."
-                              : "✓ Accept Applicant"}
+                              : "✓ Approve Applicant"}
                           </button>
 
                           <button
@@ -1137,8 +1149,9 @@ function ApplicantsContent() {
                                   : 1,
                             }}
                           >
-                            ✕ Decline
-                            Applicant
+                            {isUpdating
+                              ? "Updating..."
+                              : "✕ Decline Applicant"}
                           </button>
                         </>
                       )}
@@ -1588,6 +1601,4 @@ const styles: Record<
     color: "#991b1b",
     padding: 14,
     borderRadius: 12,
-    marginBottom: 18,
-  },
-};
+  
