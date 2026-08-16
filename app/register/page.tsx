@@ -27,6 +27,7 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const [councilDoc, setCouncilDoc] = useState<File | null>(null);
+  const [permitDoc, setPermitDoc] = useState<File | null>(null);
   const [nationalIdDoc, setNationalIdDoc] = useState<File | null>(null);
   const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
 
@@ -38,6 +39,16 @@ export default function RegisterPage() {
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+
+  const pharmacistPermitProfessions = [
+    "Pharmacist - PIMART Permit",
+    "Pharmacist - PCDT Permit",
+    "Pharmacist - PCDT & PIMART Permit",
+  ];
+
+  const requiresPermitDocument =
+    accountType === "worker" &&
+    pharmacistPermitProfessions.includes(profession);
 
   function calculateAge(dob: string) {
     if (!dob) return null;
@@ -127,6 +138,13 @@ export default function RegisterPage() {
         return;
       }
 
+      if (requiresPermitDocument && !permitDoc) {
+        setMessage(
+          "Please upload the applicable PIMART / PCDT permit document."
+        );
+        return;
+      }
+
       if (!nationalIdDoc) {
         setMessage("Please upload national identity document.");
         return;
@@ -176,6 +194,7 @@ export default function RegisterPage() {
             account_type:
               accountType === "organisation" ? "employer" : "worker",
             platform: "CareStaffing",
+            requires_permit_document: requiresPermitDocument,
           },
         },
       });
@@ -189,6 +208,7 @@ export default function RegisterPage() {
       }
 
       let councilDocUrl = "";
+      let permitDocUrl = "";
       let nationalIdDocUrl = "";
       let profilePhotoUrl = "";
       let cipcDocUrl = "";
@@ -201,6 +221,15 @@ export default function RegisterPage() {
           councilDoc,
           "council-registration"
         );
+
+        if (requiresPermitDocument) {
+          permitDocUrl = await uploadFile(
+            "carestaffing-documents",
+            userId,
+            permitDoc,
+            "pharmacist-permit"
+          );
+        }
 
         nationalIdDocUrl = await uploadFile(
           "carestaffing-documents",
@@ -255,6 +284,7 @@ export default function RegisterPage() {
         city_area: city.trim(),
         platform: "CareStaffing",
         council_registration_document_url: councilDocUrl,
+        pharmacist_permit_document_url: permitDocUrl,
         national_id_document_url: nationalIdDocUrl,
         profile_photo_url: profilePhotoUrl || companyLogoUrl,
         updated_at: new Date().toISOString(),
@@ -382,12 +412,18 @@ export default function RegisterPage() {
               <select
                 style={styles.input}
                 value={profession}
-                onChange={(e) => setProfession(e.target.value)}
+                onChange={(e) => {
+                  setProfession(e.target.value);
+                  setPermitDoc(null);
+                }}
               >
                 <option>Doctor</option>
                 <option>Pharmacy Technician</option>
                 <option>Nurse</option>
                 <option>Pharmacist</option>
+                <option>Pharmacist - PIMART Permit</option>
+                <option>Pharmacist - PCDT Permit</option>
+                <option>Pharmacist - PCDT & PIMART Permit</option>
                 <option>Independent Prescriber</option>
                 <option>Optometrist</option>
               </select>
@@ -407,6 +443,26 @@ export default function RegisterPage() {
                   onChange={(e) => setCouncilDoc(e.target.files?.[0] || null)}
                 />
               </label>
+
+              {requiresPermitDocument && (
+                <label style={styles.permitFileLabel}>
+                  {profession === "Pharmacist - PIMART Permit"
+                    ? "Upload PIMART permit document *"
+                    : profession === "Pharmacist - PCDT Permit"
+                    ? "Upload PCDT permit document *"
+                    : "Upload PCDT & PIMART permit document(s) *"}
+
+                  <span style={styles.fileHint}>
+                    Upload your valid permit/certificate as PDF, JPG or PNG.
+                  </span>
+
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={(e) => setPermitDoc(e.target.files?.[0] || null)}
+                  />
+                </label>
+              )}
 
               <label style={styles.fileLabel}>
                 Upload national identity document *
@@ -644,6 +700,21 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: "#f0fdfa",
     color: "#115e59",
     fontWeight: 700,
+  },
+  permitFileLabel: {
+    display: "grid",
+    gap: "8px",
+    padding: "14px 16px",
+    borderRadius: "12px",
+    border: "2px dashed #0f766e",
+    background: "#ccfbf1",
+    color: "#134e4a",
+    fontWeight: 800,
+  },
+  fileHint: {
+    fontSize: "13px",
+    fontWeight: 500,
+    color: "#475569",
   },
   passwordWrap: {
     position: "relative",
