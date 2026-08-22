@@ -9,303 +9,488 @@ type Shift = {
   id: string;
   title: string | null;
   profession_required: string | null;
-  business_name: string | null;
   city: string | null;
-  start_date: string | null;
+  location: string | null;
+  shift_date: string | null;
   start_time: string | null;
   end_time: string | null;
-  employer_rate: number | null;
-  locum_rate: number | null;
-  platform_fee: number | null;
-  currency: string | null;
+
+  hourly_rate?: number | null;
+  locum_rate?: number | null;
+  platform_fee?: number | null;
+
   status: string | null;
+  company_id?: string | null;
+  created_by?: string | null;
 };
 
 type Timesheet = {
   id: string;
   shift_id: string;
   locum_id: string;
+
   work_date: string | null;
   start_time: string | null;
   end_time: string | null;
   break_minutes: number | null;
+
   hours_worked: number | null;
   agreed_rate: number | null;
   total_amount: number | null;
+
+  notes?: string | null;
+  employer_notes?: string | null;
+
   status: string | null;
-  submitted_at: string | null;
-  approved_at: string | null;
-  created_at: string | null;
+
+  submitted_at?: string | null;
+  approved_at?: string | null;
+
+  employer_proposed_start_time?: string | null;
+  employer_proposed_end_time?: string | null;
+  employer_proposed_break_minutes?: number | null;
+  employer_proposed_hours?: number | null;
+  employer_amendment_reason?: string | null;
+  amendment_requested_at?: string | null;
+
+  rejection_reason?: string | null;
+  rejected_at?: string | null;
 };
 
-type Payment = {
+type Application = {
   id: string;
-  timesheet_id: string | null;
-  payment_status: string | null;
-  payout_status: string | null;
-  locum_amount: number | null;
-  platform_fee: number | null;
-  employer_total: number | null;
-  stripe_checkout_session_id: string | null;
-  paid_at: string | null;
+  shift_id: string;
+  locum_id?: string | null;
+  applicant_id?: string | null;
+  status?: string | null;
 };
 
-export default function EmployerShiftsPage() {
+type Profile = {
+  id: string;
+  first_name?: string | null;
+  surname?: string | null;
+  email?: string | null;
+  mobile?: string | null;
+  profession?: string | null;
+  registration_number?: string | null;
+};
+
+type AmendmentDraft = {
+  startTime: string;
+  endTime: string;
+  breakMinutes: string;
+  reason: string;
+};
+
+export default function EmployerShiftsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const requestedShift = searchParams.get("shift") || "";
+
+  const [userId, setUserId] = useState("");
+  const [companyId, setCompanyId] = useState("");
+
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [timesheets, setTimesheets] = useState<Timesheet[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
+  const [applications, setApplications] = useState<Application[]>([]);
+  const [profiles, setProfiles] = useState<Record<string, Profile>>({});
 
   const [loading, setLoading] = useState(true);
-  const [actionId, setActionId] = useState("");
+  const [savingId, setSavingId] = useState("");
+
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
+  const [amendmentOpenId, setAmendmentOpenId] = useState("");
+  const [rejectOpenId, setRejectOpenId] = useState("");
+
+  const [amendments, setAmendments] = useState<
+    Record<string, AmendmentDraft>
+  >({});
+
+  const [rejectionReasons, setRejectionReasons] = useState<
+    Record<string, string>
+  >({});
+
   useEffect(() => {
-    void loadPage();
+    void initialise();
   }, []);
 
-  useEffect(() => {
-    const payment = searchParams.get("payment");
+  async function initialise() {
+    setLoading(true);
+    setError("");
 
-    if (payment === "success") {
-      setMessage(
-        "Stripe payment completed. CareStaffing is confirming the payment."
-      );
-
-      const timer = window.setTimeout(() => {
-        void loadPage();
-      }, 1500);
-
-      return () => window.clearTimeout(timer);
-    }
-
-    if (payment === "cancelled") {
-      setError("Stripe payment was cancelled. No payment was taken.");
-    }
-  }, [searchParams]);
-
-  async function loadPage() {
     try {
-      setLoading(true);
-      setError("");
-
       const {
         data: { user },
-        error: userError,
+        error: authError,
       } = await supabase.auth.getUser();
 
-      if (userError || !user) {
+      if (authError || !user) {
         router.replace("/login");
         return;
       }
 
-      const { data: shiftData, error: shiftError } = await supabase
-        .from("shifts")
-        .select(
-          `
-          id,
-          title,
-          profession_required,
-          business_name,
-          city,
-          start_date,
-          start_time,
-          end_time,
-          employer_rate,
-          locum_rate,
-          platform_fee,
-          currency,
-          status
-        `
-        )
-        .eq("created_by", user.id)
-        .order("created_at", { ascending: false });
+      setUserId(user.id);
 
-      if (shiftError) {
-        throw shiftError;
+      const { data: company, error: companyError } = await supabase
+        .from("companies")
+        .select("id")
+        .eq("owner_id", user.id)
+        .maybeSingle();
+
+      if (companyError) {
+        console.error("Company lookup error:", companyError);
       }
 
-      const employerShifts = (shiftData || []) as Shift[];
-      setShifts(employerShifts);
+      const employerCompanyId = company?.id || "";
 
-      const shiftIds = employerShifts.map((shift) => shift.id);
+      setCompanyId(employerCompanyId);
 
-      if (shiftIds.length === 0) {
-        setTimesheets([]);
-        setPayments([]);
-        return;
-      }
-
-      const { data: timesheetData, error: timesheetError } = await supabase
-        .from("timesheets")
-        .select(
-          `
-          id,
-          shift_id,
-          locum_id,
-          work_date,
-          start_time,
-          end_time,
-          break_minutes,
-          hours_worked,
-          agreed_rate,
-          total_amount,
-          status,
-          submitted_at,
-          approved_at,
-          created_at
-        `
-        )
-        .in("shift_id", shiftIds)
-        .order("created_at", { ascending: false });
-
-      if (timesheetError) {
-        throw timesheetError;
-      }
-
-      const employerTimesheets = (timesheetData || []) as Timesheet[];
-      setTimesheets(employerTimesheets);
-
-      const timesheetIds = employerTimesheets.map((item) => item.id);
-
-      if (timesheetIds.length === 0) {
-        setPayments([]);
-        return;
-      }
-
-      const { data: paymentData, error: paymentError } = await supabase
-        .from("payments")
-        .select(
-          `
-          id,
-          timesheet_id,
-          payment_status,
-          payout_status,
-          locum_amount,
-          platform_fee,
-          employer_total,
-          stripe_checkout_session_id,
-          paid_at
-        `
-        )
-        .in("timesheet_id", timesheetIds)
-        .order("created_at", { ascending: false });
-
-      if (paymentError) {
-        console.error("Payment loading error:", paymentError);
-        setPayments([]);
-      } else {
-        setPayments((paymentData || []) as Payment[]);
-      }
+      await loadEverything(user.id, employerCompanyId);
     } catch (err: any) {
-      console.error("Employer shifts load error:", err);
+      console.error(err);
       setError(err?.message || "Could not load employer shifts.");
     } finally {
       setLoading(false);
     }
   }
 
-  const timesheetsByShift = useMemo(() => {
-    const map = new Map<string, Timesheet[]>();
-
-    for (const timesheet of timesheets) {
-      const existing = map.get(timesheet.shift_id) || [];
-      existing.push(timesheet);
-      map.set(timesheet.shift_id, existing);
-    }
-
-    return map;
-  }, [timesheets]);
-
-  const paymentByTimesheet = useMemo(() => {
-    const map = new Map<string, Payment>();
-
-    for (const payment of payments) {
-      if (payment.timesheet_id && !map.has(payment.timesheet_id)) {
-        map.set(payment.timesheet_id, payment);
-      }
-    }
-
-    return map;
-  }, [payments]);
-
-  async function approveTimesheet(timesheetId: string) {
-    setActionId(timesheetId);
+  async function loadEverything(
+    employerId: string,
+    employerCompanyId: string
+  ) {
     setError("");
-    setMessage("");
 
-    try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+    /*
+     * Load employer shifts.
+     * We support either company_id or created_by because your CareStaffing
+     * schema has evolved during development.
+     */
+    let shiftQuery = supabase.from("shifts").select("*");
 
-      if (userError || !user) {
-        router.replace("/login");
-        return;
-      }
+    if (employerCompanyId) {
+      shiftQuery = shiftQuery.or(
+        `company_id.eq.${employerCompanyId},created_by.eq.${employerId}`
+      );
+    } else {
+      shiftQuery = shiftQuery.eq("created_by", employerId);
+    }
 
-      const target = timesheets.find((item) => item.id === timesheetId);
+    const { data: shiftRows, error: shiftError } = await shiftQuery.order(
+      "shift_date",
+      { ascending: false }
+    );
 
-      if (!target) {
-        throw new Error("Timesheet not found.");
-      }
+    if (shiftError) {
+      throw shiftError;
+    }
 
-      const shift = shifts.find((item) => item.id === target.shift_id);
+    const employerShifts = (shiftRows || []) as Shift[];
 
-      if (!shift) {
-        throw new Error("Shift not found.");
-      }
+    setShifts(employerShifts);
 
-      const hours = Number(target.hours_worked || 0);
-      const agreedRate = Number(
-        target.agreed_rate || shift.locum_rate || 0
+    const shiftIds = employerShifts.map((shift) => shift.id);
+
+    if (shiftIds.length === 0) {
+      setTimesheets([]);
+      setApplications([]);
+      setProfiles({});
+      return;
+    }
+
+    const { data: timesheetRows, error: timesheetError } = await supabase
+      .from("timesheets")
+      .select("*")
+      .in("shift_id", shiftIds)
+      .order("work_date", { ascending: false });
+
+    if (timesheetError) {
+      throw timesheetError;
+    }
+
+    const loadedTimesheets = (timesheetRows || []) as Timesheet[];
+
+    setTimesheets(loadedTimesheets);
+
+    const { data: applicationRows, error: applicationError } = await supabase
+      .from("shift_applications")
+      .select("*")
+      .in("shift_id", shiftIds);
+
+    if (applicationError) {
+      console.error("Application loading error:", applicationError);
+    }
+
+    const loadedApplications = (applicationRows || []) as Application[];
+
+    setApplications(loadedApplications);
+
+    const locumIds = Array.from(
+      new Set(
+        [
+          ...loadedTimesheets.map((row) => row.locum_id),
+          ...loadedApplications.map(
+            (row) => row.locum_id || row.applicant_id || ""
+          ),
+        ].filter(Boolean)
+      )
+    );
+
+    if (locumIds.length === 0) {
+      setProfiles({});
+      return;
+    }
+
+    const { data: profileRows, error: profileError } = await supabase
+      .from("profiles")
+      .select(
+        "id,first_name,surname,email,mobile,profession,registration_number"
+      )
+      .in("id", locumIds);
+
+    if (profileError) {
+      console.warn(
+        "Could not load applicant profiles. Check profiles SELECT RLS.",
+        profileError
       );
 
-      const totalAmount =
-        Number(target.total_amount || 0) > 0
-          ? Number(target.total_amount)
-          : hours * agreedRate;
+      setProfiles({});
+      return;
+    }
 
-      if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
-        throw new Error(
-          "The timesheet does not contain a valid payable amount."
-        );
-      }
+    const profileMap: Record<string, Profile> = {};
 
+    for (const profile of profileRows || []) {
+      profileMap[profile.id] = profile as Profile;
+    }
+
+    setProfiles(profileMap);
+  }
+
+  function timesheetsForShift(shiftId: string) {
+    return timesheets.filter((row) => row.shift_id === shiftId);
+  }
+
+  function applicantCount(shiftId: string) {
+    return applications.filter((row) => row.shift_id === shiftId).length;
+  }
+
+  function profileForTimesheet(row: Timesheet) {
+    return profiles[row.locum_id];
+  }
+
+  function grossAmount(row: Timesheet) {
+    if (Number(row.total_amount || 0) > 0) {
+      return Number(row.total_amount || 0);
+    }
+
+    return (
+      Number(row.hours_worked || 0) *
+      Number(row.agreed_rate || 0)
+    );
+  }
+
+  /*
+   * This follows your current display:
+   * locum earnings = submitted total
+   * CareStaffing fee = 10% extra
+   * employer pays = locum earnings + CareStaffing fee
+   */
+  function careStaffingFee(row: Timesheet) {
+    return grossAmount(row) * 0.1;
+  }
+
+  function employerPays(row: Timesheet) {
+    return grossAmount(row) + careStaffingFee(row);
+  }
+
+  function calculateHours(
+    startTime: string,
+    endTime: string,
+    breakMinutes: number
+  ) {
+    if (!startTime || !endTime) {
+      return 0;
+    }
+
+    const [startHour, startMinute] = startTime.split(":").map(Number);
+    const [endHour, endMinute] = endTime.split(":").map(Number);
+
+    let start = startHour * 60 + startMinute;
+    let end = endHour * 60 + endMinute;
+
+    if (end < start) {
+      end += 1440;
+    }
+
+    const minutes = Math.max(
+      0,
+      end - start - Math.max(0, breakMinutes)
+    );
+
+    return Number((minutes / 60).toFixed(2));
+  }
+
+  function openAmendment(row: Timesheet) {
+    setRejectOpenId("");
+
+    setAmendmentOpenId(row.id);
+
+    setAmendments((current) => ({
+      ...current,
+      [row.id]: {
+        startTime: row.start_time?.slice(0, 5) || "",
+        endTime: row.end_time?.slice(0, 5) || "",
+        breakMinutes: String(row.break_minutes || 0),
+        reason: "",
+      },
+    }));
+  }
+
+  function openReject(row: Timesheet) {
+    setAmendmentOpenId("");
+    setRejectOpenId(row.id);
+
+    setRejectionReasons((current) => ({
+      ...current,
+      [row.id]: current[row.id] || "",
+    }));
+  }
+
+  async function approveTimesheet(row: Timesheet) {
+    const confirmed = window.confirm(
+      `Approve ${Number(row.hours_worked || 0).toFixed(
+        2
+      )} hours for payment?\n\nOnce approved, this timesheet should be treated as final.`
+    );
+
+    if (!confirmed) return;
+
+    setSavingId(row.id);
+    setMessage("");
+    setError("");
+
+    try {
       const { error: updateError } = await supabase
         .from("timesheets")
         .update({
           status: "approved",
-          agreed_rate: agreedRate,
-          total_amount: Number(totalAmount.toFixed(2)),
           approved_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+
+          employer_proposed_start_time: null,
+          employer_proposed_end_time: null,
+          employer_proposed_break_minutes: null,
+          employer_proposed_hours: null,
+          employer_amendment_reason: null,
         })
-        .eq("id", timesheetId);
+        .eq("id", row.id);
 
       if (updateError) {
         throw updateError;
       }
 
       setMessage(
-        "Timesheet approved. The invoice is now ready for Stripe payment."
+        "Timesheet approved. The invoice is now eligible for payment."
       );
 
-      await loadPage();
+      await loadEverything(userId, companyId);
     } catch (err: any) {
       console.error("Approve timesheet error:", err);
-      setError(err?.message || "Could not approve the timesheet.");
+      setError(err?.message || "Could not approve timesheet.");
     } finally {
-      setActionId("");
+      setSavingId("");
     }
   }
 
-  async function rejectTimesheet(timesheetId: string) {
-    setActionId(timesheetId);
+  async function requestAmendment(row: Timesheet) {
+    const draft = amendments[row.id];
+
+    if (!draft) return;
+
+    if (!draft.startTime || !draft.endTime) {
+      setError("Enter the employer proposed start and end times.");
+      return;
+    }
+
+    if (!draft.reason.trim()) {
+      setError("Please give the locum a reason for the amendment.");
+      return;
+    }
+
+    const proposedBreak = Math.max(
+      0,
+      Number(draft.breakMinutes) || 0
+    );
+
+    const proposedHours = calculateHours(
+      draft.startTime,
+      draft.endTime,
+      proposedBreak
+    );
+
+    if (proposedHours <= 0) {
+      setError("The proposed hours must be greater than zero.");
+      return;
+    }
+
+    setSavingId(row.id);
+    setError("");
+    setMessage("");
+
+    try {
+      const { error: updateError } = await supabase
+        .from("timesheets")
+        .update({
+          status: "amendment_requested",
+
+          employer_proposed_start_time: draft.startTime,
+          employer_proposed_end_time: draft.endTime,
+          employer_proposed_break_minutes: proposedBreak,
+          employer_proposed_hours: proposedHours,
+
+          employer_amendment_reason: draft.reason.trim(),
+          amendment_requested_at: new Date().toISOString(),
+
+          approved_at: null,
+        })
+        .eq("id", row.id);
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      setAmendmentOpenId("");
+
+      setMessage(
+        "Amendment sent to the locum. Payment remains locked until the timesheet is resubmitted and approved."
+      );
+
+      await loadEverything(userId, companyId);
+    } catch (err: any) {
+      console.error("Request amendment error:", err);
+      setError(err?.message || "Could not request amendment.");
+    } finally {
+      setSavingId("");
+    }
+  }
+
+  async function rejectTimesheet(row: Timesheet) {
+    const reason = rejectionReasons[row.id]?.trim();
+
+    if (!reason) {
+      setError("Enter a reason before rejecting the timesheet.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Reject this timesheet? Use Request Amendment instead if you only disagree with the hours."
+    );
+
+    if (!confirmed) return;
+
+    setSavingId(row.id);
     setError("");
     setMessage("");
 
@@ -314,497 +499,575 @@ export default function EmployerShiftsPage() {
         .from("timesheets")
         .update({
           status: "rejected",
-          updated_at: new Date().toISOString(),
+          rejection_reason: reason,
+          rejected_at: new Date().toISOString(),
+          approved_at: null,
         })
-        .eq("id", timesheetId);
+        .eq("id", row.id);
 
       if (updateError) {
         throw updateError;
       }
 
-      setMessage("Timesheet rejected.");
-      await loadPage();
+      setRejectOpenId("");
+
+      setMessage("Timesheet rejected and returned to the locum.");
+
+      await loadEverything(userId, companyId);
     } catch (err: any) {
       console.error("Reject timesheet error:", err);
-      setError(err?.message || "Could not reject the timesheet.");
+      setError(err?.message || "Could not reject timesheet.");
     } finally {
-      setActionId("");
+      setSavingId("");
     }
   }
 
-  async function payTimesheet(timesheetId: string) {
-    setActionId(timesheetId);
-    setError("");
-    setMessage("");
-
-    try {
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError || !session?.access_token) {
-        router.replace("/login");
-        return;
-      }
-
-      const response = await fetch("/api/stripe/create-checkout", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          timesheetId,
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          result?.error || "Could not create Stripe Checkout session."
-        );
-      }
-
-      if (!result?.url) {
-        throw new Error("Stripe Checkout did not return a payment URL.");
-      }
-
-      window.location.href = result.url;
-    } catch (err: any) {
-      console.error("Stripe payment error:", err);
-      setError(err?.message || "Could not start Stripe payment.");
-      setActionId("");
-    }
-  }
-
-  async function logout() {
-    await supabase.auth.signOut();
-    router.replace("/login");
-  }
-
-  function currencySymbol(currency?: string | null) {
-    if (currency === "GBP") return "£";
-    if (currency === "EUR") return "€";
-    if (currency === "NZD") return "NZ$";
-    return "R";
-  }
-
-  function money(value: number | null | undefined, currency?: string | null) {
-    return `${currencySymbol(currency)}${Number(value || 0).toFixed(2)}`;
-  }
-
-  function getLocumAmount(timesheet: Timesheet, shift: Shift) {
-    const stored = Number(timesheet.total_amount || 0);
-
-    if (stored > 0) {
-      return stored;
+  function goToStripePayment(row?: Timesheet) {
+    if (row && row.status?.toLowerCase() !== "approved") {
+      setError(
+        "The employer can only pay an invoice after the timesheet has been approved."
+      );
+      return;
     }
 
-    const rate = Number(
-      timesheet.agreed_rate || shift.locum_rate || 0
+    if (row) {
+      router.push(
+        `/employer/payments?timesheet=${encodeURIComponent(row.id)}`
+      );
+      return;
+    }
+
+    router.push("/employer/payments");
+  }
+
+  const filteredShifts = useMemo(() => {
+    if (!requestedShift) return shifts;
+
+    const exact = shifts.filter((shift) => shift.id === requestedShift);
+
+    return exact.length > 0 ? exact : shifts;
+  }, [requestedShift, shifts]);
+
+  if (loading) {
+    return (
+      <main style={styles.page}>
+        <div style={styles.container}>
+          <div style={styles.card}>Loading employer shifts...</div>
+        </div>
+      </main>
     );
-
-    return Number(timesheet.hours_worked || 0) * rate;
-  }
-
-  function formatDate(value?: string | null) {
-    if (!value) return "—";
-
-    const date = new Date(
-      value.length === 10 ? `${value}T00:00:00` : value
-    );
-
-    if (Number.isNaN(date.getTime())) {
-      return value;
-    }
-
-    return date.toLocaleDateString("en-ZA", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
   }
 
   return (
     <main style={styles.page}>
       <div style={styles.container}>
-        <div style={styles.nav}>
-          <Link href="/employer" style={styles.brand}>
-            CARESTAFFING
-          </Link>
-
-          <div style={styles.links}>
-            <Link href="/employer" style={styles.link}>
-              Post Shift
-            </Link>
-
-            <Link href="/employer/applicants" style={styles.link}>
-              Applicants
-            </Link>
-
-            <Link href="/employer/profile" style={styles.link}>
-              Organisation Profile
-            </Link>
-
-            <button onClick={logout} style={styles.logout}>
-              Logout
-            </button>
-          </div>
-        </div>
+        <Link href="/employer" style={styles.back}>
+          ← Back to Employer Portal
+        </Link>
 
         <section style={styles.hero}>
-          <div>
-            <p style={styles.label}>EMPLOYER PORTAL</p>
+          <p style={styles.eyebrow}>EMPLOYER PORTAL</p>
 
-            <h1 style={styles.title}>My Shifts & Payments</h1>
+          <h1 style={styles.title}>My Shifts & Payments</h1>
 
-            <p style={styles.subtitle}>
-              Review locum timesheets, approve completed work and pay
-              approved invoices securely with Stripe.
-            </p>
-          </div>
+          <p style={styles.subtitle}>
+            Review locum timesheets, request amendments, approve completed
+            work and pay approved invoices.
+          </p>
 
-          <div style={styles.stripeBadge}>STRIPE PAYMENTS</div>
+          <button
+            type="button"
+            onClick={() => goToStripePayment()}
+            style={styles.stripeButton}
+          >
+            💳 STRIPE PAYMENTS
+          </button>
         </section>
 
         {message && <div style={styles.success}>{message}</div>}
+
         {error && <div style={styles.error}>{error}</div>}
 
-        {loading ? (
-          <div style={styles.card}>Loading shifts...</div>
-        ) : shifts.length === 0 ? (
-          <div style={styles.card}>
-            <h2>No shifts posted yet</h2>
-
-            <p style={styles.muted}>
-              Post your first healthcare shift.
-            </p>
+        {filteredShifts.length === 0 ? (
+          <section style={styles.card}>
+            <h2>No shifts found</h2>
 
             <Link href="/employer" style={styles.primaryLink}>
-              + Post New Shift
+              Post New Shift
             </Link>
-          </div>
+          </section>
         ) : (
-          <div style={styles.grid}>
-            {shifts.map((shift) => {
-              const shiftTimesheets =
-                timesheetsByShift.get(shift.id) || [];
+          filteredShifts.map((shift) => {
+            const shiftTimesheets = timesheetsForShift(shift.id);
+            const applicants = applicantCount(shift.id);
 
-              return (
-                <article key={shift.id} style={styles.card}>
-                  <div style={styles.cardTop}>
-                    <div>
-                      <h2 style={{ margin: 0 }}>
-                        {shift.title || "Healthcare Shift"}
-                      </h2>
+            return (
+              <section key={shift.id} style={styles.shiftCard}>
+                <div style={styles.shiftTop}>
+                  <div>
+                    <h2 style={styles.shiftTitle}>
+                      {shift.title || "Healthcare Shift"}
+                    </h2>
 
-                      <p style={styles.muted}>
-                        {shift.business_name || "Organisation"}
-                      </p>
-                    </div>
-
-                    <span style={styles.status}>
-                      {(shift.status || "open").toUpperCase()}
-                    </span>
+                    <p style={styles.location}>
+                      {shift.location || shift.city || "Location not specified"}
+                    </p>
                   </div>
 
-                  <div style={styles.details}>
-                    <Info
-                      label="Profession"
-                      value={shift.profession_required || "—"}
-                    />
+                  <span style={styles.shiftStatus}>
+                    {(shift.status || "open").toUpperCase()}
+                  </span>
+                </div>
 
-                    <Info label="City" value={shift.city || "—"} />
+                <div style={styles.shiftDetails}>
+                  <Detail
+                    label="Profession"
+                    value={shift.profession_required || "—"}
+                  />
 
-                    <Info
-                      label="Date"
-                      value={formatDate(shift.start_date)}
-                    />
+                  <Detail
+                    label="City"
+                    value={shift.city || "—"}
+                  />
 
-                    <Info
-                      label="Time"
-                      value={
-                        shift.start_time && shift.end_time
-                          ? `${shift.start_time.slice(
-                              0,
-                              5
-                            )} - ${shift.end_time.slice(0, 5)}`
-                          : "—"
-                      }
-                    />
+                  <Detail
+                    label="Date"
+                    value={formatDate(shift.shift_date)}
+                  />
+
+                  <Detail
+                    label="Applicants"
+                    value={String(applicants)}
+                  />
+
+                  <Detail
+                    label="Locum Rate"
+                    value={`R${Number(
+                      shift.locum_rate || shift.hourly_rate || 0
+                    ).toFixed(2)}`}
+                  />
+
+                  <Detail
+                    label="CareStaffing 10%"
+                    value={`R${(
+                      Number(
+                        shift.locum_rate || shift.hourly_rate || 0
+                      ) * 0.1
+                    ).toFixed(2)}`}
+                  />
+                </div>
+
+                <Link
+                  href={`/employer/applicants?shift=${shift.id}`}
+                  style={styles.applicantLink}
+                >
+                  View Applicants →
+                </Link>
+
+                <hr style={styles.hr} />
+
+                <div style={styles.sectionHeading}>
+                  <div>
+                    <h3 style={{ margin: 0 }}>Timesheets & Invoices</h3>
+
+                    <p style={styles.muted}>
+                      Review submitted work before making payment.
+                    </p>
                   </div>
 
-                  <div style={styles.rates}>
-                    <RateBox
-                      label="Locum Rate"
-                      value={money(
-                        shift.locum_rate,
-                        shift.currency
-                      )}
-                    />
+                  <span style={styles.countBadge}>
+                    {shiftTimesheets.length}
+                  </span>
+                </div>
 
-                    <RateBox
-                      label="CareStaffing Fee"
-                      value={money(
-                        shift.platform_fee,
-                        shift.currency
-                      )}
-                    />
-
-                    <RateBox
-                      label="Organisation Rate"
-                      value={money(
-                        shift.employer_rate,
-                        shift.currency
-                      )}
-                    />
+                {shiftTimesheets.length === 0 ? (
+                  <div style={styles.emptyTimesheet}>
+                    No timesheets submitted for this shift yet.
                   </div>
+                ) : (
+                  <div style={styles.timesheetList}>
+                    {shiftTimesheets.map((row) => {
+                      const profile = profileForTimesheet(row);
 
-                  <div style={styles.topActions}>
-                    <Link
-                      href={`/employer/applicants?shift=${shift.id}`}
-                      style={styles.secondaryLink}
-                    >
-                      View Applicants
-                    </Link>
-                  </div>
+                      const status =
+                        row.status?.toLowerCase() || "submitted";
 
-                  <div style={styles.divider} />
+                      const gross = grossAmount(row);
+                      const fee = careStaffingFee(row);
+                      const employerTotal = employerPays(row);
 
-                  <div style={styles.timesheetHeader}>
-                    <div>
-                      <h3 style={styles.timesheetTitle}>
-                        Timesheets & Invoices
-                      </h3>
+                      const amendment = amendments[row.id];
 
-                      <p style={styles.mutedSmall}>
-                        Approve submitted work before making payment.
-                      </p>
-                    </div>
+                      const proposedHours = amendment
+                        ? calculateHours(
+                            amendment.startTime,
+                            amendment.endTime,
+                            Number(amendment.breakMinutes) || 0
+                          )
+                        : 0;
 
-                    <span style={styles.countBadge}>
-                      {shiftTimesheets.length}
-                    </span>
-                  </div>
+                      const proposedPay =
+                        proposedHours * Number(row.agreed_rate || 0);
 
-                  {shiftTimesheets.length === 0 ? (
-                    <div style={styles.emptyTimesheet}>
-                      No timesheet submitted for this shift yet.
-                    </div>
-                  ) : (
-                    <div style={styles.timesheetList}>
-                      {shiftTimesheets.map((timesheet) => {
-                        const payment =
-                          paymentByTimesheet.get(timesheet.id);
+                      const fullName =
+                        [profile?.first_name, profile?.surname]
+                          .filter(Boolean)
+                          .join(" ") || "Healthcare Professional";
 
-                        const status = String(
-                          timesheet.status || "submitted"
-                        ).toLowerCase();
+                      return (
+                        <article key={row.id} style={styles.timesheetCard}>
+                          <div style={styles.timesheetHeader}>
+                            <div>
+                              <p style={styles.workedLabel}>WORKED</p>
 
-                        const paymentStatus = String(
-                          payment?.payment_status || "unpaid"
-                        ).toLowerCase();
+                              <h3 style={{ margin: "4px 0" }}>
+                                {formatDate(row.work_date)}
+                              </h3>
 
-                        const paid =
-                          paymentStatus === "paid" ||
-                          paymentStatus === "succeeded";
+                              <p style={styles.muted}>
+                                {Number(row.hours_worked || 0).toFixed(2)}{" "}
+                                hours • {formatTime(row.start_time)}–
+                                {formatTime(row.end_time)}
+                              </p>
 
-                        const locumAmount = getLocumAmount(
-                          timesheet,
-                          shift
-                        );
+                              <p style={styles.workerName}>{fullName}</p>
+                            </div>
 
-                        const platformFee = Number(
-                          (locumAmount * 0.1).toFixed(2)
-                        );
+                            <StatusBadge status={status} />
+                          </div>
 
-                        const employerTotal = Number(
-                          (locumAmount + platformFee).toFixed(2)
-                        );
+                          <div style={styles.moneyGrid}>
+                            <MoneyBox
+                              label="Locum Earnings"
+                              value={`R${gross.toFixed(2)}`}
+                            />
 
-                        return (
-                          <div
-                            key={timesheet.id}
-                            style={styles.timesheetCard}
-                          >
-                            <div style={styles.timesheetTop}>
+                            <MoneyBox
+                              label="CareStaffing 10%"
+                              value={`R${fee.toFixed(2)}`}
+                            />
+
+                            <MoneyBox
+                              label="Employer Pays"
+                              value={`R${employerTotal.toFixed(2)}`}
+                              highlight
+                            />
+                          </div>
+
+                          {row.notes && (
+                            <div style={styles.locumNote}>
+                              <strong>Locum note:</strong> {row.notes}
+                            </div>
+                          )}
+
+                          {status === "amendment_requested" && (
+                            <div style={styles.amendmentExisting}>
+                              <strong>Amendment requested</strong>
+
+                              <p>
+                                Proposed:{" "}
+                                {formatTime(
+                                  row.employer_proposed_start_time
+                                )}{" "}
+                                –{" "}
+                                {formatTime(
+                                  row.employer_proposed_end_time
+                                )}
+                              </p>
+
+                              <p>
+                                Break:{" "}
+                                {row.employer_proposed_break_minutes || 0} min
+                              </p>
+
+                              <p>
+                                Proposed hours:{" "}
+                                {Number(
+                                  row.employer_proposed_hours || 0
+                                ).toFixed(2)}
+                              </p>
+
+                              <p>
+                                Reason:{" "}
+                                {row.employer_amendment_reason || "—"}
+                              </p>
+
+                              <strong>
+                                Waiting for locum response / resubmission.
+                              </strong>
+                            </div>
+                          )}
+
+                          {status === "rejected" && (
+                            <div style={styles.rejectedBox}>
+                              <strong>Timesheet rejected</strong>
+
+                              <p>{row.rejection_reason || "No reason supplied."}</p>
+                            </div>
+                          )}
+
+                          {status === "approved" && (
+                            <div style={styles.approvedBox}>
                               <div>
-                                <p style={styles.smallLabel}>
-                                  WORKED
-                                </p>
+                                <strong>✓ Timesheet Approved</strong>
 
-                                <strong>
-                                  {formatDate(timesheet.work_date)}
-                                </strong>
-
-                                <p style={styles.mutedSmall}>
-                                  {Number(
-                                    timesheet.hours_worked || 0
-                                  ).toFixed(2)}{" "}
-                                  hours
-                                  {timesheet.start_time &&
-                                  timesheet.end_time
-                                    ? ` • ${timesheet.start_time.slice(
-                                        0,
-                                        5
-                                      )}–${timesheet.end_time.slice(
-                                        0,
-                                        5
-                                      )}`
-                                    : ""}
+                                <p style={{ margin: "4px 0 0" }}>
+                                  Invoice is ready for payment.
                                 </p>
                               </div>
 
-                              <TimesheetBadge status={status} />
+                              <button
+                                type="button"
+                                onClick={() => goToStripePayment(row)}
+                                style={styles.payButton}
+                              >
+                                💳 PAY R{employerTotal.toFixed(2)}
+                              </button>
                             </div>
+                          )}
 
-                            <div style={styles.invoiceBreakdown}>
-                              <RateBox
-                                label="Locum Earnings"
-                                value={money(
-                                  locumAmount,
-                                  shift.currency
-                                )}
-                              />
+                          {(status === "submitted" ||
+                            status === "resubmitted") && (
+                            <div style={styles.reviewBox}>
+                              <div>
+                                <strong>Review submitted timesheet</strong>
 
-                              <RateBox
-                                label="CareStaffing 10%"
-                                value={money(
-                                  platformFee,
-                                  shift.currency
-                                )}
-                              />
-
-                              <RateBox
-                                label="Employer Pays"
-                                value={money(
-                                  employerTotal,
-                                  shift.currency
-                                )}
-                                highlight
-                              />
-                            </div>
-
-                            {paid ? (
-                              <div style={styles.paidBox}>
-                                <div>
-                                  <strong>
-                                    ✓ Employer Payment Confirmed
-                                  </strong>
-
-                                  <div style={styles.mutedSmall}>
-                                    {payment?.paid_at
-                                      ? `Paid ${formatDate(
-                                          payment.paid_at
-                                        )}`
-                                      : "Stripe payment received"}
-                                  </div>
-                                </div>
-
-                                <span style={styles.paidBadge}>
-                                  PAID
-                                </span>
+                                <p style={styles.muted}>
+                                  Confirm the hours, request a correction or
+                                  reject the timesheet.
+                                </p>
                               </div>
-                            ) : status === "approved" ? (
-                              <div style={styles.paymentArea}>
-                                <div>
-                                  <strong>
-                                    Invoice ready for payment
-                                  </strong>
 
-                                  <p style={styles.mutedSmall}>
-                                    The locum receives{" "}
-                                    {money(
-                                      locumAmount,
-                                      shift.currency
-                                    )}. CareStaffing adds 10% to
-                                    the employer total.
-                                  </p>
-                                </div>
+                              <div style={styles.reviewButtons}>
+                                <button
+                                  type="button"
+                                  onClick={() => openAmendment(row)}
+                                  style={styles.amendButton}
+                                >
+                                  ✏️ Request Amendment
+                                </button>
 
                                 <button
                                   type="button"
-                                  onClick={() =>
-                                    payTimesheet(timesheet.id)
-                                  }
-                                  disabled={actionId === timesheet.id}
-                                  style={styles.payButton}
+                                  onClick={() => openReject(row)}
+                                  style={styles.rejectButton}
                                 >
-                                  {actionId === timesheet.id
-                                    ? "Opening Stripe..."
-                                    : `Pay ${money(
-                                        employerTotal,
-                                        shift.currency
-                                      )} with Stripe`}
+                                  Reject
+                                </button>
+
+                                <button
+                                  type="button"
+                                  disabled={savingId === row.id}
+                                  onClick={() => approveTimesheet(row)}
+                                  style={styles.approveButton}
+                                >
+                                  {savingId === row.id
+                                    ? "Saving..."
+                                    : "✓ Approve Timesheet"}
                                 </button>
                               </div>
-                            ) : status === "rejected" ? (
-                              <div style={styles.rejectedBox}>
-                                Timesheet rejected. Ask the locum to
-                                correct and resubmit it.
+                            </div>
+                          )}
+
+                          {amendmentOpenId === row.id && amendment && (
+                            <div style={styles.amendmentPanel}>
+                              <h3 style={{ marginTop: 0 }}>
+                                Request Timesheet Amendment
+                              </h3>
+
+                              <div style={styles.originalBox}>
+                                <strong>Locum submitted</strong>
+
+                                <p>
+                                  {formatTime(row.start_time)} –{" "}
+                                  {formatTime(row.end_time)}
+                                </p>
+
+                                <p>
+                                  Break: {row.break_minutes || 0} min
+                                </p>
+
+                                <p>
+                                  Hours:{" "}
+                                  {Number(row.hours_worked || 0).toFixed(2)}
+                                </p>
                               </div>
-                            ) : (
-                              <div style={styles.approvalArea}>
-                                <div>
-                                  <strong>
-                                    Review submitted timesheet
-                                  </strong>
 
-                                  <p style={styles.mutedSmall}>
-                                    Confirm the hours before approving
-                                    this invoice for payment.
-                                  </p>
-                                </div>
+                              <div style={styles.amendGrid}>
+                                <Field label="Proposed Start">
+                                  <input
+                                    type="time"
+                                    value={amendment.startTime}
+                                    onChange={(e) =>
+                                      setAmendments((current) => ({
+                                        ...current,
+                                        [row.id]: {
+                                          ...current[row.id],
+                                          startTime: e.target.value,
+                                        },
+                                      }))
+                                    }
+                                    style={styles.input}
+                                  />
+                                </Field>
 
-                                <div style={styles.approvalButtons}>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      rejectTimesheet(timesheet.id)
+                                <Field label="Proposed End">
+                                  <input
+                                    type="time"
+                                    value={amendment.endTime}
+                                    onChange={(e) =>
+                                      setAmendments((current) => ({
+                                        ...current,
+                                        [row.id]: {
+                                          ...current[row.id],
+                                          endTime: e.target.value,
+                                        },
+                                      }))
                                     }
-                                    disabled={
-                                      actionId === timesheet.id
-                                    }
-                                    style={styles.rejectButton}
-                                  >
-                                    Reject
-                                  </button>
+                                    style={styles.input}
+                                  />
+                                </Field>
 
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      approveTimesheet(timesheet.id)
+                                <Field label="Break Minutes">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={amendment.breakMinutes}
+                                    onChange={(e) =>
+                                      setAmendments((current) => ({
+                                        ...current,
+                                        [row.id]: {
+                                          ...current[row.id],
+                                          breakMinutes: e.target.value,
+                                        },
+                                      }))
                                     }
-                                    disabled={
-                                      actionId === timesheet.id
-                                    }
-                                    style={styles.approveButton}
-                                  >
-                                    {actionId === timesheet.id
-                                      ? "Saving..."
-                                      : "Approve Timesheet"}
-                                  </button>
-                                </div>
+                                    style={styles.input}
+                                  />
+                                </Field>
+
+                                <Field label="Proposed Hours">
+                                  <input
+                                    readOnly
+                                    value={proposedHours.toFixed(2)}
+                                    style={{
+                                      ...styles.input,
+                                      background: "#f1f5f9",
+                                    }}
+                                  />
+                                </Field>
                               </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-          </div>
+
+                              <div style={styles.proposedPay}>
+                                Proposed locum earnings:{" "}
+                                <strong>R{proposedPay.toFixed(2)}</strong>
+                              </div>
+
+                              <Field label="Reason for amendment">
+                                <textarea
+                                  rows={3}
+                                  value={amendment.reason}
+                                  onChange={(e) =>
+                                    setAmendments((current) => ({
+                                      ...current,
+                                      [row.id]: {
+                                        ...current[row.id],
+                                        reason: e.target.value,
+                                      },
+                                    }))
+                                  }
+                                  placeholder="Example: Locum signed in at 10:15 according to the pharmacy attendance record."
+                                  style={{
+                                    ...styles.input,
+                                    resize: "vertical",
+                                  }}
+                                />
+                              </Field>
+
+                              <div style={styles.panelButtons}>
+                                <button
+                                  type="button"
+                                  onClick={() => setAmendmentOpenId("")}
+                                  style={styles.cancelButton}
+                                >
+                                  Cancel
+                                </button>
+
+                                <button
+                                  type="button"
+                                  disabled={savingId === row.id}
+                                  onClick={() => requestAmendment(row)}
+                                  style={styles.sendAmendmentButton}
+                                >
+                                  Send Amendment to Locum
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {rejectOpenId === row.id && (
+                            <div style={styles.rejectPanel}>
+                              <h3 style={{ marginTop: 0 }}>
+                                Reject Timesheet
+                              </h3>
+
+                              <p style={styles.muted}>
+                                Use this only where the timesheet itself should
+                                not be accepted. For disagreements about hours,
+                                use Request Amendment.
+                              </p>
+
+                              <Field label="Reason for rejection">
+                                <textarea
+                                  rows={3}
+                                  value={rejectionReasons[row.id] || ""}
+                                  onChange={(e) =>
+                                    setRejectionReasons((current) => ({
+                                      ...current,
+                                      [row.id]: e.target.value,
+                                    }))
+                                  }
+                                  style={{
+                                    ...styles.input,
+                                    resize: "vertical",
+                                  }}
+                                />
+                              </Field>
+
+                              <div style={styles.panelButtons}>
+                                <button
+                                  type="button"
+                                  onClick={() => setRejectOpenId("")}
+                                  style={styles.cancelButton}
+                                >
+                                  Cancel
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => rejectTimesheet(row)}
+                                  style={styles.rejectConfirmButton}
+                                >
+                                  Confirm Rejection
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            );
+          })
         )}
       </div>
     </main>
   );
 }
 
-function Info({
+function Detail({
   label,
   value,
 }: {
@@ -812,14 +1075,14 @@ function Info({
   value: string;
 }) {
   return (
-    <div style={styles.info}>
-      <small>{label}</small>
+    <div>
+      <div style={styles.smallLabel}>{label}</div>
       <strong>{value}</strong>
     </div>
   );
 }
 
-function RateBox({
+function MoneyBox({
   label,
   value,
   highlight = false,
@@ -831,442 +1094,521 @@ function RateBox({
   return (
     <div
       style={{
-        ...styles.rateBox,
-        ...(highlight ? styles.rateBoxHighlight : {}),
+        ...styles.moneyBox,
+        ...(highlight ? styles.moneyHighlight : {}),
       }}
     >
-      <small>{label}</small>
-      <strong style={highlight ? styles.highlightValue : undefined}>
-        {value}
-      </strong>
+      <span style={styles.smallLabel}>{label}</span>
+      <strong style={{ fontSize: "18px" }}>{value}</strong>
     </div>
   );
 }
 
-function TimesheetBadge({ status }: { status: string }) {
-  const clean = status || "submitted";
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label style={styles.field}>
+      <span style={styles.fieldLabel}>{label}</span>
+      {children}
+    </label>
+  );
+}
 
-  const style =
-    clean === "approved"
-      ? styles.badgeApproved
-      : clean === "rejected"
-      ? styles.badgeRejected
-      : styles.badgeSubmitted;
+function StatusBadge({
+  status,
+}: {
+  status: string;
+}) {
+  let style: React.CSSProperties = styles.statusSubmitted;
+
+  if (status === "approved") {
+    style = styles.statusApproved;
+  }
+
+  if (status === "amendment_requested") {
+    style = styles.statusAmendment;
+  }
+
+  if (status === "rejected") {
+    style = styles.statusRejected;
+  }
 
   return (
-    <span style={{ ...styles.timesheetBadge, ...style }}>
-      {clean.toUpperCase()}
+    <span
+      style={{
+        ...styles.statusBase,
+        ...style,
+      }}
+    >
+      {status.replaceAll("_", " ").toUpperCase()}
     </span>
   );
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return "—";
+
+  const date = new Date(`${value}T00:00:00`);
+
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleDateString("en-ZA", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatTime(value?: string | null) {
+  if (!value) return "—";
+
+  return value.slice(0, 5);
 }
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
     background: "#f1f5f9",
-    padding: 24,
+    padding: "28px 20px 60px",
     fontFamily: "Arial, sans-serif",
   },
 
   container: {
-    maxWidth: 1150,
+    maxWidth: "1180px",
     margin: "0 auto",
   },
 
-  nav: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 16,
-    flexWrap: "wrap",
-    alignItems: "center",
-    marginBottom: 20,
-  },
-
-  brand: {
+  back: {
     color: "#0f766e",
     fontWeight: 900,
     textDecoration: "none",
-    letterSpacing: 1,
-  },
-
-  links: {
-    display: "flex",
-    gap: 14,
-    alignItems: "center",
-    flexWrap: "wrap",
-  },
-
-  link: {
-    color: "#334155",
-    textDecoration: "none",
-    fontWeight: 700,
-  },
-
-  logout: {
-    background: "white",
-    border: "1px solid #cbd5e1",
-    borderRadius: 10,
-    padding: "9px 14px",
-    cursor: "pointer",
-    fontWeight: 700,
   },
 
   hero: {
-    background: "linear-gradient(135deg,#0f172a,#0f766e)",
+    background:
+      "linear-gradient(135deg,#0f172a,#0f766e)",
     color: "white",
-    borderRadius: 24,
-    padding: 30,
-    marginBottom: 20,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 20,
-    flexWrap: "wrap",
+    padding: "34px",
+    borderRadius: "28px",
+    margin: "20px 0",
   },
 
-  label: {
+  eyebrow: {
+    margin: 0,
     color: "#99f6e4",
     fontWeight: 900,
-    fontSize: 13,
-    margin: 0,
+    letterSpacing: "1px",
   },
 
   title: {
-    fontSize: 38,
     margin: "8px 0",
+    fontSize: "42px",
   },
 
   subtitle: {
-    color: "#cbd5e1",
-    maxWidth: 680,
+    maxWidth: "760px",
+    color: "#ccfbf1",
     lineHeight: 1.5,
   },
 
-  stripeBadge: {
-    background: "rgba(255,255,255,.12)",
-    border: "1px solid rgba(255,255,255,.22)",
-    borderRadius: 14,
-    padding: "11px 15px",
-    fontWeight: 900,
-    fontSize: 12,
-    letterSpacing: 0.8,
-  },
-
-  grid: {
-    display: "grid",
-    gap: 18,
-  },
-
-  card: {
-    background: "white",
-    borderRadius: 20,
-    padding: 24,
-    border: "1px solid #e2e8f0",
-  },
-
-  cardTop: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 15,
-    flexWrap: "wrap",
-  },
-
-  muted: {
-    color: "#64748b",
-  },
-
-  mutedSmall: {
-    color: "#64748b",
-    fontSize: 13,
-    margin: "5px 0 0",
-    lineHeight: 1.4,
-  },
-
-  status: {
-    background: "#dcfce7",
-    color: "#166534",
-    borderRadius: 999,
-    padding: "7px 11px",
-    fontWeight: 900,
-    fontSize: 12,
-    height: "fit-content",
-  },
-
-  details: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit,minmax(150px,1fr))",
-    gap: 12,
-    marginTop: 20,
-  },
-
-  info: {
-    background: "#f8fafc",
-    borderRadius: 12,
-    padding: 14,
-    display: "grid",
-    gap: 5,
-  },
-
-  rates: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit,minmax(160px,1fr))",
-    gap: 12,
-    marginTop: 16,
-  },
-
-  rateBox: {
-    background: "#f8fafc",
-    borderRadius: 12,
-    padding: 14,
-    display: "grid",
-    gap: 5,
-    border: "1px solid #e2e8f0",
-  },
-
-  rateBoxHighlight: {
-    background: "#ecfdf5",
-    border: "1px solid #86efac",
-  },
-
-  highlightValue: {
-    color: "#166534",
-    fontSize: 18,
-  },
-
-  topActions: {
-    marginTop: 18,
-  },
-
-  primaryLink: {
-    display: "inline-block",
-    background: "#0f766e",
-    color: "white",
-    padding: "11px 16px",
-    borderRadius: 11,
-    textDecoration: "none",
-    fontWeight: 800,
-  },
-
-  secondaryLink: {
-    display: "inline-block",
-    background: "#f1f5f9",
-    color: "#0f172a",
-    padding: "10px 15px",
-    borderRadius: 10,
-    textDecoration: "none",
-    fontWeight: 800,
-  },
-
-  divider: {
-    height: 1,
-    background: "#e2e8f0",
-    margin: "24px 0",
-  },
-
-  timesheetHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 15,
-  },
-
-  timesheetTitle: {
-    margin: 0,
-    color: "#0f172a",
-  },
-
-  countBadge: {
-    minWidth: 32,
-    height: 32,
-    borderRadius: 999,
-    display: "grid",
-    placeItems: "center",
-    background: "#e0f2fe",
-    color: "#075985",
-    fontWeight: 900,
-  },
-
-  emptyTimesheet: {
-    marginTop: 15,
-    background: "#f8fafc",
-    border: "1px dashed #cbd5e1",
-    borderRadius: 13,
-    padding: 18,
-    color: "#64748b",
-  },
-
-  timesheetList: {
-    display: "grid",
-    gap: 14,
-    marginTop: 16,
-  },
-
-  timesheetCard: {
-    border: "1px solid #e2e8f0",
-    borderRadius: 16,
-    padding: 18,
-    background: "#ffffff",
-  },
-
-  timesheetTop: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 15,
-    alignItems: "flex-start",
-  },
-
-  smallLabel: {
-    margin: "0 0 5px",
-    fontSize: 10,
-    fontWeight: 900,
-    letterSpacing: 0.8,
-    color: "#64748b",
-  },
-
-  timesheetBadge: {
-    padding: "7px 10px",
-    borderRadius: 999,
-    fontSize: 11,
-    fontWeight: 900,
-  },
-
-  badgeApproved: {
-    background: "#dcfce7",
-    color: "#166534",
-  },
-
-  badgeRejected: {
-    background: "#fee2e2",
-    color: "#991b1b",
-  },
-
-  badgeSubmitted: {
-    background: "#fef3c7",
-    color: "#92400e",
-  },
-
-  invoiceBreakdown: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit,minmax(155px,1fr))",
-    gap: 10,
-    marginTop: 16,
-  },
-
-  approvalArea: {
-    marginTop: 16,
-    borderRadius: 14,
-    padding: 16,
-    background: "#fffbeb",
-    border: "1px solid #fde68a",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 15,
-    flexWrap: "wrap",
-  },
-
-  approvalButtons: {
-    display: "flex",
-    gap: 9,
-    flexWrap: "wrap",
-  },
-
-  approveButton: {
-    border: "none",
-    borderRadius: 11,
-    padding: "11px 15px",
-    background: "#0f766e",
-    color: "white",
+  stripeButton: {
+    marginTop: "18px",
+    background: "#39ff14",
+    color: "#052e16",
+    border: "2px solid #22c55e",
+    boxShadow: "0 0 20px rgba(57,255,20,0.45)",
+    padding: "14px 20px",
+    borderRadius: "14px",
     fontWeight: 900,
     cursor: "pointer",
-  },
-
-  rejectButton: {
-    border: "1px solid #fecaca",
-    borderRadius: 11,
-    padding: "11px 15px",
-    background: "#fff",
-    color: "#991b1b",
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-
-  paymentArea: {
-    marginTop: 16,
-    borderRadius: 14,
-    padding: 16,
-    background: "#eff6ff",
-    border: "1px solid #bfdbfe",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 15,
-    flexWrap: "wrap",
-  },
-
-  payButton: {
-    border: "none",
-    borderRadius: 12,
-    padding: "13px 18px",
-    background: "#635bff",
-    color: "white",
-    fontWeight: 900,
-    cursor: "pointer",
-    fontSize: 14,
-  },
-
-  paidBox: {
-    marginTop: 16,
-    borderRadius: 14,
-    padding: 16,
-    background: "#ecfdf5",
-    border: "1px solid #86efac",
-    color: "#166534",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 15,
-    flexWrap: "wrap",
-  },
-
-  paidBadge: {
-    background: "#166534",
-    color: "white",
-    borderRadius: 999,
-    padding: "7px 11px",
-    fontWeight: 900,
-    fontSize: 11,
-  },
-
-  rejectedBox: {
-    marginTop: 16,
-    padding: 14,
-    borderRadius: 12,
-    background: "#fef2f2",
-    color: "#991b1b",
-    border: "1px solid #fecaca",
   },
 
   success: {
     background: "#dcfce7",
     color: "#166534",
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 18,
-    border: "1px solid #bbf7d0",
-    fontWeight: 700,
+    padding: "14px",
+    borderRadius: "12px",
+    marginBottom: "18px",
+    fontWeight: 800,
   },
 
   error: {
     background: "#fee2e2",
     color: "#991b1b",
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 18,
-    border: "1px solid #fecaca",
+    padding: "14px",
+    borderRadius: "12px",
+    marginBottom: "18px",
+    fontWeight: 800,
+  },
+
+  card: {
+    background: "white",
+    padding: "24px",
+    borderRadius: "20px",
+  },
+
+  shiftCard: {
+    marginTop: "20px",
+    background: "white",
+    padding: "26px",
+    borderRadius: "22px",
+    boxShadow: "0 10px 28px rgba(15,23,42,.06)",
+  },
+
+  shiftTop: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: "15px",
+  },
+
+  shiftTitle: {
+    margin: 0,
+    fontSize: "28px",
+  },
+
+  location: {
+    color: "#64748b",
+  },
+
+  shiftStatus: {
+    background: "#dcfce7",
+    color: "#166534",
+    borderRadius: "999px",
+    padding: "8px 12px",
+    fontWeight: 900,
+    height: "fit-content",
+  },
+
+  shiftDetails: {
+    marginTop: "20px",
+    display: "grid",
+    gridTemplateColumns:
+      "repeat(auto-fit,minmax(140px,1fr))",
+    gap: "16px",
+  },
+
+  applicantLink: {
+    display: "inline-block",
+    marginTop: "20px",
+    color: "#0f766e",
+    fontWeight: 900,
+  },
+
+  hr: {
+    border: 0,
+    borderTop: "1px solid #e2e8f0",
+    margin: "24px 0",
+  },
+
+  sectionHeading: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: "15px",
+  },
+
+  countBadge: {
+    width: "34px",
+    height: "34px",
+    display: "grid",
+    placeItems: "center",
+    borderRadius: "999px",
+    background: "#ccfbf1",
+    color: "#0f766e",
+    fontWeight: 900,
+  },
+
+  emptyTimesheet: {
+    marginTop: "18px",
+    background: "#f8fafc",
+    padding: "18px",
+    borderRadius: "14px",
+    color: "#64748b",
+  },
+
+  timesheetList: {
+    display: "grid",
+    gap: "18px",
+    marginTop: "18px",
+  },
+
+  timesheetCard: {
+    border: "1px solid #e2e8f0",
+    borderRadius: "18px",
+    padding: "20px",
+  },
+
+  timesheetHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: "15px",
+  },
+
+  workedLabel: {
+    margin: 0,
+    fontSize: "11px",
+    fontWeight: 900,
+    letterSpacing: "1px",
+    color: "#64748b",
+  },
+
+  workerName: {
+    margin: "10px 0 0",
+    fontWeight: 800,
+    color: "#334155",
+  },
+
+  moneyGrid: {
+    marginTop: "18px",
+    display: "grid",
+    gridTemplateColumns:
+      "repeat(auto-fit,minmax(170px,1fr))",
+    gap: "12px",
+  },
+
+  moneyBox: {
+    padding: "15px",
+    borderRadius: "12px",
+    background: "#f8fafc",
+    display: "grid",
+    gap: "5px",
+  },
+
+  moneyHighlight: {
+    background: "#dcfce7",
+    color: "#166534",
+  },
+
+  smallLabel: {
+    fontSize: "12px",
+    color: "#64748b",
     fontWeight: 700,
+  },
+
+  locumNote: {
+    marginTop: "15px",
+    padding: "12px",
+    background: "#f8fafc",
+    borderRadius: "10px",
+  },
+
+  reviewBox: {
+    marginTop: "18px",
+    padding: "16px",
+    borderRadius: "14px",
+    background: "#fffbeb",
+  },
+
+  reviewButtons: {
+    display: "flex",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: "10px",
+    marginTop: "15px",
+  },
+
+  amendButton: {
+    padding: "12px 16px",
+    borderRadius: "10px",
+    border: "1px solid #f59e0b",
+    background: "#fef3c7",
+    color: "#92400e",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+
+  rejectButton: {
+    padding: "12px 16px",
+    borderRadius: "10px",
+    border: "1px solid #fecaca",
+    background: "white",
+    color: "#b91c1c",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+
+  approveButton: {
+    padding: "12px 18px",
+    border: "none",
+    borderRadius: "10px",
+    background: "#0f766e",
+    color: "white",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+
+  amendmentPanel: {
+    marginTop: "18px",
+    padding: "20px",
+    border: "2px solid #f59e0b",
+    borderRadius: "16px",
+    background: "#fffdf5",
+  },
+
+  originalBox: {
+    background: "#f8fafc",
+    borderRadius: "12px",
+    padding: "14px",
+    marginBottom: "16px",
+  },
+
+  amendGrid: {
+    display: "grid",
+    gridTemplateColumns:
+      "repeat(auto-fit,minmax(180px,1fr))",
+    gap: "14px",
+  },
+
+  field: {
+    display: "grid",
+    gap: "6px",
+  },
+
+  fieldLabel: {
+    fontWeight: 800,
+    color: "#334155",
+  },
+
+  input: {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "12px",
+    borderRadius: "10px",
+    border: "1px solid #cbd5e1",
+    fontSize: "15px",
+  },
+
+  proposedPay: {
+    margin: "15px 0",
+    padding: "12px",
+    borderRadius: "10px",
+    background: "#ecfeff",
+    color: "#0f766e",
+  },
+
+  panelButtons: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: "10px",
+    marginTop: "15px",
+  },
+
+  cancelButton: {
+    padding: "11px 15px",
+    border: "1px solid #cbd5e1",
+    borderRadius: "10px",
+    background: "white",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+
+  sendAmendmentButton: {
+    padding: "11px 16px",
+    border: 0,
+    borderRadius: "10px",
+    background: "#f59e0b",
+    color: "#451a03",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+
+  rejectPanel: {
+    marginTop: "18px",
+    padding: "20px",
+    borderRadius: "16px",
+    border: "2px solid #fecaca",
+    background: "#fff7f7",
+  },
+
+  rejectConfirmButton: {
+    padding: "11px 16px",
+    border: 0,
+    borderRadius: "10px",
+    background: "#dc2626",
+    color: "white",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+
+  amendmentExisting: {
+    marginTop: "16px",
+    padding: "16px",
+    borderRadius: "14px",
+    background: "#fef3c7",
+    color: "#92400e",
+  },
+
+  rejectedBox: {
+    marginTop: "16px",
+    padding: "16px",
+    borderRadius: "14px",
+    background: "#fee2e2",
+    color: "#991b1b",
+  },
+
+  approvedBox: {
+    marginTop: "16px",
+    padding: "16px",
+    borderRadius: "14px",
+    background: "#dcfce7",
+    color: "#166534",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: "15px",
+  },
+
+  payButton: {
+    background: "#39ff14",
+    color: "#052e16",
+    border: "2px solid #22c55e",
+    boxShadow: "0 0 18px rgba(57,255,20,.40)",
+    padding: "13px 18px",
+    borderRadius: "11px",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+
+  statusBase: {
+    height: "fit-content",
+    padding: "7px 11px",
+    borderRadius: "999px",
+    fontSize: "11px",
+    fontWeight: 900,
+  },
+
+  statusSubmitted: {
+    background: "#fef3c7",
+    color: "#92400e",
+  },
+
+  statusApproved: {
+    background: "#dcfce7",
+    color: "#166534",
+  },
+
+  statusAmendment: {
+    background: "#ffedd5",
+    color: "#9a3412",
+  },
+
+  statusRejected: {
+    background: "#fee2e2",
+    color: "#991b1b",
+  },
+
+  muted: {
+    color: "#64748b",
+    margin: "5px 0",
+  },
+
+  primaryLink: {
+    color: "#0f766e",
+    fontWeight: 900,
   },
 };
