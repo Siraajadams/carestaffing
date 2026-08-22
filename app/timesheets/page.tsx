@@ -325,6 +325,11 @@ export default function TimesheetsPage() {
       return;
     }
 
+    if (!userId) {
+      setError("Your session could not be confirmed. Please log in again.");
+      return;
+    }
+
     const rate = Number(entry.agreed_rate || 0);
     const newTotal = Number((proposedHours * rate).toFixed(2));
 
@@ -345,8 +350,12 @@ export default function TimesheetsPage() {
     try {
       const now = new Date().toISOString();
 
+      // IMPORTANT:
+      // Do not use .single() directly on the UPDATE response.
+      // If RLS blocks the update, PostgREST returns zero rows and .single()
+      // turns that into the misleading 406 "Cannot coerce result to a single JSON object".
       const {
-        data: updatedTimesheet,
+        data: updatedRows,
         error: updateError,
       } = await supabase
         .from("timesheets")
@@ -363,30 +372,62 @@ export default function TimesheetsPage() {
         })
         .eq("id", entry.id)
         .eq("locum_id", userId)
-        .select("*")
-        .single();
+        .select("*");
 
-      if (updateError) throw updateError;
-
-      if (!updatedTimesheet) {
-        throw new Error("Timesheet was not updated. Please try again.");
+      if (updateError) {
+        console.error("Accept amendment UPDATE error:", updateError);
+        throw updateError;
       }
 
-      if (updatedTimesheet.status !== "resubmitted") {
+      if (!updatedRows || updatedRows.length === 0) {
         throw new Error(
-          "The timesheet did not move to resubmitted status."
+          "The amendment was not saved. Supabase did not allow this locum to update the timesheet. Run the CareStaffing timesheet RLS SQL fix in Supabase, then try again."
+        );
+      }
+
+      const updatedTimesheet = updatedRows[0] as Timesheet;
+
+      if (updatedTimesheet.status?.toLowerCase() !== "resubmitted") {
+        throw new Error(
+          "The timesheet update completed but the status did not change to resubmitted."
+        );
+      }
+
+      // Re-read the row from Supabase so we know the database really contains
+      // the accepted amendment before telling the locum it succeeded.
+      const {
+        data: verifiedTimesheet,
+        error: verifyError,
+      } = await supabase
+        .from("timesheets")
+        .select("*")
+        .eq("id", entry.id)
+        .eq("locum_id", userId)
+        .maybeSingle();
+
+      if (verifyError) {
+        console.error("Accept amendment VERIFY error:", verifyError);
+        throw verifyError;
+      }
+
+      if (
+        !verifiedTimesheet ||
+        verifiedTimesheet.status?.toLowerCase() !== "resubmitted"
+      ) {
+        throw new Error(
+          "The amendment could not be verified after saving. Please refresh and try again."
         );
       }
 
       console.log(
-        "Employer amendment accepted and resubmitted:",
-        updatedTimesheet
+        "Employer amendment accepted and verified:",
+        verifiedTimesheet
       );
 
       setTimesheets((current) =>
         current.map((item) =>
           item.id === entry.id
-            ? (updatedTimesheet as Timesheet)
+            ? (verifiedTimesheet as Timesheet)
             : item
         )
       );
