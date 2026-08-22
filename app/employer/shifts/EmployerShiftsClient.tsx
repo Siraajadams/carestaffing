@@ -14,11 +14,9 @@ type Shift = {
   shift_date: string | null;
   start_time: string | null;
   end_time: string | null;
-
   hourly_rate?: number | null;
   locum_rate?: number | null;
   platform_fee?: number | null;
-
   status: string | null;
   company_id?: string | null;
   created_by?: string | null;
@@ -28,33 +26,28 @@ type Timesheet = {
   id: string;
   shift_id: string;
   locum_id: string;
-
   work_date: string | null;
   start_time: string | null;
   end_time: string | null;
   break_minutes: number | null;
-
   hours_worked: number | null;
   agreed_rate: number | null;
   total_amount: number | null;
-
   notes?: string | null;
   employer_notes?: string | null;
-
   status: string | null;
-
   submitted_at?: string | null;
   approved_at?: string | null;
-
   employer_proposed_start_time?: string | null;
   employer_proposed_end_time?: string | null;
   employer_proposed_break_minutes?: number | null;
   employer_proposed_hours?: number | null;
   employer_amendment_reason?: string | null;
   amendment_requested_at?: string | null;
-
+  amendment_accepted_at?: string | null;
   rejection_reason?: string | null;
   rejected_at?: string | null;
+  updated_at?: string | null;
 };
 
 type Application = {
@@ -85,7 +78,6 @@ type AmendmentDraft = {
 export default function EmployerShiftsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-
   const requestedShift = searchParams.get("shift") || "";
 
   const [userId, setUserId] = useState("");
@@ -98,6 +90,7 @@ export default function EmployerShiftsClient() {
 
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -114,7 +107,35 @@ export default function EmployerShiftsClient() {
   >({});
 
   useEffect(() => {
+    let mounted = true;
+
     void initialise();
+
+    const channel = supabase
+      .channel("carestaffing-employer-timesheet-updates")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "timesheets",
+        },
+        async (payload) => {
+          console.log("Employer received timesheet realtime update:", payload);
+
+          if (!mounted) return;
+
+          await refreshEmployerData(false);
+        }
+      )
+      .subscribe((status) => {
+        console.log("Employer realtime subscription:", status);
+      });
+
+    return () => {
+      mounted = false;
+      void supabase.removeChannel(channel);
+    };
   }, []);
 
   async function initialise() {
@@ -150,10 +171,45 @@ export default function EmployerShiftsClient() {
 
       await loadEverything(user.id, employerCompanyId);
     } catch (err: any) {
-      console.error(err);
+      console.error("Employer initialise error:", err);
       setError(err?.message || "Could not load employer shifts.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshEmployerData(showMessage = true) {
+    setRefreshing(true);
+
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) return;
+
+      const { data: company } = await supabase
+        .from("companies")
+        .select("id")
+        .eq("owner_id", user.id)
+        .maybeSingle();
+
+      const employerCompanyId = company?.id || "";
+
+      setUserId(user.id);
+      setCompanyId(employerCompanyId);
+
+      await loadEverything(user.id, employerCompanyId);
+
+      if (showMessage) {
+        setMessage("Timesheets refreshed.");
+      }
+    } catch (err: any) {
+      console.error("Employer refresh error:", err);
+      setError(err?.message || "Could not refresh timesheets.");
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -163,11 +219,6 @@ export default function EmployerShiftsClient() {
   ) {
     setError("");
 
-    /*
-     * Load employer shifts.
-     * We support either company_id or created_by because your CareStaffing
-     * schema has evolved during development.
-     */
     let shiftQuery = supabase.from("shifts").select("*");
 
     if (employerCompanyId) {
@@ -183,12 +234,9 @@ export default function EmployerShiftsClient() {
       { ascending: false }
     );
 
-    if (shiftError) {
-      throw shiftError;
-    }
+    if (shiftError) throw shiftError;
 
     const employerShifts = (shiftRows || []) as Shift[];
-
     setShifts(employerShifts);
 
     const shiftIds = employerShifts.map((shift) => shift.id);
@@ -206,12 +254,9 @@ export default function EmployerShiftsClient() {
       .in("shift_id", shiftIds)
       .order("work_date", { ascending: false });
 
-    if (timesheetError) {
-      throw timesheetError;
-    }
+    if (timesheetError) throw timesheetError;
 
     const loadedTimesheets = (timesheetRows || []) as Timesheet[];
-
     setTimesheets(loadedTimesheets);
 
     const { data: applicationRows, error: applicationError } = await supabase
@@ -224,7 +269,6 @@ export default function EmployerShiftsClient() {
     }
 
     const loadedApplications = (applicationRows || []) as Application[];
-
     setApplications(loadedApplications);
 
     const locumIds = Array.from(
@@ -255,7 +299,6 @@ export default function EmployerShiftsClient() {
         "Could not load applicant profiles. Check profiles SELECT RLS.",
         profileError
       );
-
       setProfiles({});
       return;
     }
@@ -286,18 +329,9 @@ export default function EmployerShiftsClient() {
       return Number(row.total_amount || 0);
     }
 
-    return (
-      Number(row.hours_worked || 0) *
-      Number(row.agreed_rate || 0)
-    );
+    return Number(row.hours_worked || 0) * Number(row.agreed_rate || 0);
   }
 
-  /*
-   * This follows your current display:
-   * locum earnings = submitted total
-   * CareStaffing fee = 10% extra
-   * employer pays = locum earnings + CareStaffing fee
-   */
   function careStaffingFee(row: Timesheet) {
     return grossAmount(row) * 0.1;
   }
@@ -311,9 +345,7 @@ export default function EmployerShiftsClient() {
     endTime: string,
     breakMinutes: number
   ) {
-    if (!startTime || !endTime) {
-      return 0;
-    }
+    if (!startTime || !endTime) return 0;
 
     const [startHour, startMinute] = startTime.split(":").map(Number);
     const [endHour, endMinute] = endTime.split(":").map(Number);
@@ -321,9 +353,7 @@ export default function EmployerShiftsClient() {
     let start = startHour * 60 + startMinute;
     let end = endHour * 60 + endMinute;
 
-    if (end < start) {
-      end += 1440;
-    }
+    if (end < start) end += 1440;
 
     const minutes = Math.max(
       0,
@@ -335,7 +365,6 @@ export default function EmployerShiftsClient() {
 
   function openAmendment(row: Timesheet) {
     setRejectOpenId("");
-
     setAmendmentOpenId(row.id);
 
     setAmendments((current) => ({
@@ -363,7 +392,7 @@ export default function EmployerShiftsClient() {
     const confirmed = window.confirm(
       `Approve ${Number(row.hours_worked || 0).toFixed(
         2
-      )} hours for payment?\n\nOnce approved, this timesheet should be treated as final.`
+      )} hours for payment?\n\nOnce approved, this timesheet will be treated as final.`
     );
 
     if (!confirmed) return;
@@ -373,29 +402,26 @@ export default function EmployerShiftsClient() {
     setError("");
 
     try {
-      const { error: updateError } = await supabase
+      const { data: updated, error: updateError } = await supabase
         .from("timesheets")
         .update({
           status: "approved",
           approved_at: new Date().toISOString(),
-
-          employer_proposed_start_time: null,
-          employer_proposed_end_time: null,
-          employer_proposed_break_minutes: null,
-          employer_proposed_hours: null,
-          employer_amendment_reason: null,
+          updated_at: new Date().toISOString(),
         })
-        .eq("id", row.id);
+        .eq("id", row.id)
+        .select("*")
+        .single();
 
-      if (updateError) {
-        throw updateError;
-      }
+      if (updateError) throw updateError;
+
+      console.log("Approved timesheet:", updated);
 
       setMessage(
         "Timesheet approved. The invoice is now eligible for payment."
       );
 
-      await loadEverything(userId, companyId);
+      await refreshEmployerData(false);
     } catch (err: any) {
       console.error("Approve timesheet error:", err);
       setError(err?.message || "Could not approve timesheet.");
@@ -440,34 +466,34 @@ export default function EmployerShiftsClient() {
     setMessage("");
 
     try {
-      const { error: updateError } = await supabase
+      const { data: updated, error: updateError } = await supabase
         .from("timesheets")
         .update({
           status: "amendment_requested",
-
           employer_proposed_start_time: draft.startTime,
           employer_proposed_end_time: draft.endTime,
           employer_proposed_break_minutes: proposedBreak,
           employer_proposed_hours: proposedHours,
-
           employer_amendment_reason: draft.reason.trim(),
           amendment_requested_at: new Date().toISOString(),
-
+          amendment_accepted_at: null,
           approved_at: null,
+          updated_at: new Date().toISOString(),
         })
-        .eq("id", row.id);
+        .eq("id", row.id)
+        .select("*")
+        .single();
 
-      if (updateError) {
-        throw updateError;
-      }
+      if (updateError) throw updateError;
+
+      console.log("Amendment requested:", updated);
 
       setAmendmentOpenId("");
-
       setMessage(
-        "Amendment sent to the locum. Payment remains locked until the timesheet is resubmitted and approved."
+        "Amendment sent to the locum. Payment remains locked until final approval."
       );
 
-      await loadEverything(userId, companyId);
+      await refreshEmployerData(false);
     } catch (err: any) {
       console.error("Request amendment error:", err);
       setError(err?.message || "Could not request amendment.");
@@ -495,25 +521,27 @@ export default function EmployerShiftsClient() {
     setMessage("");
 
     try {
-      const { error: updateError } = await supabase
+      const { data: updated, error: updateError } = await supabase
         .from("timesheets")
         .update({
           status: "rejected",
           rejection_reason: reason,
           rejected_at: new Date().toISOString(),
           approved_at: null,
+          updated_at: new Date().toISOString(),
         })
-        .eq("id", row.id);
+        .eq("id", row.id)
+        .select("*")
+        .single();
 
-      if (updateError) {
-        throw updateError;
-      }
+      if (updateError) throw updateError;
+
+      console.log("Rejected timesheet:", updated);
 
       setRejectOpenId("");
-
       setMessage("Timesheet rejected and returned to the locum.");
 
-      await loadEverything(userId, companyId);
+      await refreshEmployerData(false);
     } catch (err: any) {
       console.error("Reject timesheet error:", err);
       setError(err?.message || "Could not reject timesheet.");
@@ -544,7 +572,6 @@ export default function EmployerShiftsClient() {
     if (!requestedShift) return shifts;
 
     const exact = shifts.filter((shift) => shift.id === requestedShift);
-
     return exact.length > 0 ? exact : shifts;
   }, [requestedShift, shifts]);
 
@@ -575,23 +602,32 @@ export default function EmployerShiftsClient() {
             work and pay approved invoices.
           </p>
 
-          <button
-            type="button"
-            onClick={() => goToStripePayment()}
-            style={styles.stripeButton}
-          >
-            💳 STRIPE PAYMENTS
-          </button>
+          <div style={styles.heroActions}>
+            <button
+              type="button"
+              onClick={() => void refreshEmployerData(true)}
+              style={styles.refreshButton}
+              disabled={refreshing}
+            >
+              {refreshing ? "Refreshing..." : "↻ Refresh Timesheets"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => goToStripePayment()}
+              style={styles.stripeButton}
+            >
+              💳 STRIPE PAYMENTS
+            </button>
+          </div>
         </section>
 
         {message && <div style={styles.success}>{message}</div>}
-
         {error && <div style={styles.error}>{error}</div>}
 
         {filteredShifts.length === 0 ? (
           <section style={styles.card}>
             <h2>No shifts found</h2>
-
             <Link href="/employer" style={styles.primaryLink}>
               Post New Shift
             </Link>
@@ -624,29 +660,15 @@ export default function EmployerShiftsClient() {
                     label="Profession"
                     value={shift.profession_required || "—"}
                   />
-
-                  <Detail
-                    label="City"
-                    value={shift.city || "—"}
-                  />
-
-                  <Detail
-                    label="Date"
-                    value={formatDate(shift.shift_date)}
-                  />
-
-                  <Detail
-                    label="Applicants"
-                    value={String(applicants)}
-                  />
-
+                  <Detail label="City" value={shift.city || "—"} />
+                  <Detail label="Date" value={formatDate(shift.shift_date)} />
+                  <Detail label="Applicants" value={String(applicants)} />
                   <Detail
                     label="Locum Rate"
                     value={`R${Number(
                       shift.locum_rate || shift.hourly_rate || 0
                     ).toFixed(2)}`}
                   />
-
                   <Detail
                     label="CareStaffing 10%"
                     value={`R${(
@@ -669,7 +691,6 @@ export default function EmployerShiftsClient() {
                 <div style={styles.sectionHeading}>
                   <div>
                     <h3 style={{ margin: 0 }}>Timesheets & Invoices</h3>
-
                     <p style={styles.muted}>
                       Review submitted work before making payment.
                     </p>
@@ -688,14 +709,12 @@ export default function EmployerShiftsClient() {
                   <div style={styles.timesheetList}>
                     {shiftTimesheets.map((row) => {
                       const profile = profileForTimesheet(row);
-
                       const status =
                         row.status?.toLowerCase() || "submitted";
 
                       const gross = grossAmount(row);
                       const fee = careStaffingFee(row);
                       const employerTotal = employerPays(row);
-
                       const amendment = amendments[row.id];
 
                       const proposedHours = amendment
@@ -725,8 +744,9 @@ export default function EmployerShiftsClient() {
                               </h3>
 
                               <p style={styles.muted}>
-                                {Number(row.hours_worked || 0).toFixed(2)}{" "}
-                                hours • {formatTime(row.start_time)}–
+                                {Number(row.hours_worked || 0).toFixed(2)} hours
+                                {" • "}
+                                {formatTime(row.start_time)}–
                                 {formatTime(row.end_time)}
                               </p>
 
@@ -741,18 +761,47 @@ export default function EmployerShiftsClient() {
                               label="Locum Earnings"
                               value={`R${gross.toFixed(2)}`}
                             />
-
                             <MoneyBox
                               label="CareStaffing 10%"
                               value={`R${fee.toFixed(2)}`}
                             />
-
                             <MoneyBox
                               label="Employer Pays"
                               value={`R${employerTotal.toFixed(2)}`}
                               highlight
                             />
                           </div>
+
+                          {status === "resubmitted" && (
+                            <div style={styles.resubmittedBox}>
+                              <strong>✓ Locum responded to amendment</strong>
+
+                              <p style={{ margin: "8px 0 0" }}>
+                                Final submitted time:{" "}
+                                <strong>
+                                  {formatTime(row.start_time)} –{" "}
+                                  {formatTime(row.end_time)}
+                                </strong>
+                              </p>
+
+                              <p style={{ margin: "6px 0 0" }}>
+                                Final hours:{" "}
+                                <strong>
+                                  {Number(row.hours_worked || 0).toFixed(2)}
+                                </strong>
+                              </p>
+
+                              {row.amendment_accepted_at && (
+                                <p style={{ margin: "6px 0 0" }}>
+                                  Employer amendment accepted by locum.
+                                </p>
+                              )}
+
+                              <p style={{ margin: "6px 0 0" }}>
+                                Please complete final employer approval.
+                              </p>
+                            </div>
+                          )}
 
                           {row.notes && (
                             <div style={styles.locumNote}>
@@ -801,8 +850,10 @@ export default function EmployerShiftsClient() {
                           {status === "rejected" && (
                             <div style={styles.rejectedBox}>
                               <strong>Timesheet rejected</strong>
-
-                              <p>{row.rejection_reason || "No reason supplied."}</p>
+                              <p>
+                                {row.rejection_reason ||
+                                  "No reason supplied."}
+                              </p>
                             </div>
                           )}
 
@@ -810,7 +861,6 @@ export default function EmployerShiftsClient() {
                             <div style={styles.approvedBox}>
                               <div>
                                 <strong>✓ Timesheet Approved</strong>
-
                                 <p style={{ margin: "4px 0 0" }}>
                                   Invoice is ready for payment.
                                 </p>
@@ -830,11 +880,16 @@ export default function EmployerShiftsClient() {
                             status === "resubmitted") && (
                             <div style={styles.reviewBox}>
                               <div>
-                                <strong>Review submitted timesheet</strong>
+                                <strong>
+                                  {status === "resubmitted"
+                                    ? "Final review required"
+                                    : "Review submitted timesheet"}
+                                </strong>
 
                                 <p style={styles.muted}>
-                                  Confirm the hours, request a correction or
-                                  reject the timesheet.
+                                  {status === "resubmitted"
+                                    ? "The locum has responded to the amendment. Approve, request another amendment or reject."
+                                    : "Confirm the hours, request a correction or reject the timesheet."}
                                 </p>
                               </div>
 
@@ -876,17 +931,12 @@ export default function EmployerShiftsClient() {
                               </h3>
 
                               <div style={styles.originalBox}>
-                                <strong>Locum submitted</strong>
-
+                                <strong>Current submitted timesheet</strong>
                                 <p>
                                   {formatTime(row.start_time)} –{" "}
                                   {formatTime(row.end_time)}
                                 </p>
-
-                                <p>
-                                  Break: {row.break_minutes || 0} min
-                                </p>
-
+                                <p>Break: {row.break_minutes || 0} min</p>
                                 <p>
                                   Hours:{" "}
                                   {Number(row.hours_worked || 0).toFixed(2)}
@@ -1119,24 +1169,13 @@ function Field({
   );
 }
 
-function StatusBadge({
-  status,
-}: {
-  status: string;
-}) {
+function StatusBadge({ status }: { status: string }) {
   let style: React.CSSProperties = styles.statusSubmitted;
 
-  if (status === "approved") {
-    style = styles.statusApproved;
-  }
-
-  if (status === "amendment_requested") {
-    style = styles.statusAmendment;
-  }
-
-  if (status === "rejected") {
-    style = styles.statusRejected;
-  }
+  if (status === "approved") style = styles.statusApproved;
+  if (status === "amendment_requested") style = styles.statusAmendment;
+  if (status === "rejected") style = styles.statusRejected;
+  if (status === "resubmitted") style = styles.statusResubmitted;
 
   return (
     <span
@@ -1166,7 +1205,6 @@ function formatDate(value?: string | null) {
 
 function formatTime(value?: string | null) {
   if (!value) return "—";
-
   return value.slice(0, 5);
 }
 
@@ -1177,47 +1215,47 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "28px 20px 60px",
     fontFamily: "Arial, sans-serif",
   },
-
-  container: {
-    maxWidth: "1180px",
-    margin: "0 auto",
-  },
-
+  container: { maxWidth: "1180px", margin: "0 auto" },
   back: {
     color: "#0f766e",
     fontWeight: 900,
     textDecoration: "none",
   },
-
   hero: {
-    background:
-      "linear-gradient(135deg,#0f172a,#0f766e)",
+    background: "linear-gradient(135deg,#0f172a,#0f766e)",
     color: "white",
     padding: "34px",
     borderRadius: "28px",
     margin: "20px 0",
   },
-
   eyebrow: {
     margin: 0,
     color: "#99f6e4",
     fontWeight: 900,
     letterSpacing: "1px",
   },
-
-  title: {
-    margin: "8px 0",
-    fontSize: "42px",
-  },
-
+  title: { margin: "8px 0", fontSize: "42px" },
   subtitle: {
     maxWidth: "760px",
     color: "#ccfbf1",
     lineHeight: 1.5,
   },
-
-  stripeButton: {
+  heroActions: {
+    display: "flex",
+    gap: "12px",
+    flexWrap: "wrap",
     marginTop: "18px",
+  },
+  refreshButton: {
+    background: "white",
+    color: "#0f766e",
+    border: "2px solid #99f6e4",
+    padding: "14px 20px",
+    borderRadius: "14px",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+  stripeButton: {
     background: "#39ff14",
     color: "#052e16",
     border: "2px solid #22c55e",
@@ -1227,7 +1265,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     cursor: "pointer",
   },
-
   success: {
     background: "#dcfce7",
     color: "#166534",
@@ -1236,7 +1273,6 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "18px",
     fontWeight: 800,
   },
-
   error: {
     background: "#fee2e2",
     color: "#991b1b",
@@ -1245,13 +1281,11 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "18px",
     fontWeight: 800,
   },
-
   card: {
     background: "white",
     padding: "24px",
     borderRadius: "20px",
   },
-
   shiftCard: {
     marginTop: "20px",
     background: "white",
@@ -1259,22 +1293,13 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "22px",
     boxShadow: "0 10px 28px rgba(15,23,42,.06)",
   },
-
   shiftTop: {
     display: "flex",
     justifyContent: "space-between",
     gap: "15px",
   },
-
-  shiftTitle: {
-    margin: 0,
-    fontSize: "28px",
-  },
-
-  location: {
-    color: "#64748b",
-  },
-
+  shiftTitle: { margin: 0, fontSize: "28px" },
+  location: { color: "#64748b" },
   shiftStatus: {
     background: "#dcfce7",
     color: "#166534",
@@ -1283,34 +1308,28 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     height: "fit-content",
   },
-
   shiftDetails: {
     marginTop: "20px",
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit,minmax(140px,1fr))",
+    gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))",
     gap: "16px",
   },
-
   applicantLink: {
     display: "inline-block",
     marginTop: "20px",
     color: "#0f766e",
     fontWeight: 900,
   },
-
   hr: {
     border: 0,
     borderTop: "1px solid #e2e8f0",
     margin: "24px 0",
   },
-
   sectionHeading: {
     display: "flex",
     justifyContent: "space-between",
     gap: "15px",
   },
-
   countBadge: {
     width: "34px",
     height: "34px",
@@ -1321,7 +1340,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#0f766e",
     fontWeight: 900,
   },
-
   emptyTimesheet: {
     marginTop: "18px",
     background: "#f8fafc",
@@ -1329,25 +1347,21 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "14px",
     color: "#64748b",
   },
-
   timesheetList: {
     display: "grid",
     gap: "18px",
     marginTop: "18px",
   },
-
   timesheetCard: {
     border: "1px solid #e2e8f0",
     borderRadius: "18px",
     padding: "20px",
   },
-
   timesheetHeader: {
     display: "flex",
     justifyContent: "space-between",
     gap: "15px",
   },
-
   workedLabel: {
     margin: 0,
     fontSize: "11px",
@@ -1355,21 +1369,17 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "1px",
     color: "#64748b",
   },
-
   workerName: {
     margin: "10px 0 0",
     fontWeight: 800,
     color: "#334155",
   },
-
   moneyGrid: {
     marginTop: "18px",
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit,minmax(170px,1fr))",
+    gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))",
     gap: "12px",
   },
-
   moneyBox: {
     padding: "15px",
     borderRadius: "12px",
@@ -1377,32 +1387,35 @@ const styles: Record<string, React.CSSProperties> = {
     display: "grid",
     gap: "5px",
   },
-
   moneyHighlight: {
     background: "#dcfce7",
     color: "#166534",
   },
-
   smallLabel: {
     fontSize: "12px",
     color: "#64748b",
     fontWeight: 700,
   },
-
   locumNote: {
     marginTop: "15px",
     padding: "12px",
     background: "#f8fafc",
     borderRadius: "10px",
   },
-
+  resubmittedBox: {
+    marginTop: "16px",
+    padding: "16px",
+    borderRadius: "14px",
+    background: "#e0f2fe",
+    color: "#075985",
+    border: "1px solid #7dd3fc",
+  },
   reviewBox: {
     marginTop: "18px",
     padding: "16px",
     borderRadius: "14px",
     background: "#fffbeb",
   },
-
   reviewButtons: {
     display: "flex",
     flexWrap: "wrap",
@@ -1410,7 +1423,6 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     marginTop: "15px",
   },
-
   amendButton: {
     padding: "12px 16px",
     borderRadius: "10px",
@@ -1420,7 +1432,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     cursor: "pointer",
   },
-
   rejectButton: {
     padding: "12px 16px",
     borderRadius: "10px",
@@ -1430,7 +1441,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     cursor: "pointer",
   },
-
   approveButton: {
     padding: "12px 18px",
     border: "none",
@@ -1440,7 +1450,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     cursor: "pointer",
   },
-
   amendmentPanel: {
     marginTop: "18px",
     padding: "20px",
@@ -1448,31 +1457,19 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "16px",
     background: "#fffdf5",
   },
-
   originalBox: {
     background: "#f8fafc",
     borderRadius: "12px",
     padding: "14px",
     marginBottom: "16px",
   },
-
   amendGrid: {
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit,minmax(180px,1fr))",
+    gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
     gap: "14px",
   },
-
-  field: {
-    display: "grid",
-    gap: "6px",
-  },
-
-  fieldLabel: {
-    fontWeight: 800,
-    color: "#334155",
-  },
-
+  field: { display: "grid", gap: "6px" },
+  fieldLabel: { fontWeight: 800, color: "#334155" },
   input: {
     width: "100%",
     boxSizing: "border-box",
@@ -1481,7 +1478,6 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #cbd5e1",
     fontSize: "15px",
   },
-
   proposedPay: {
     margin: "15px 0",
     padding: "12px",
@@ -1489,14 +1485,12 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#ecfeff",
     color: "#0f766e",
   },
-
   panelButtons: {
     display: "flex",
     justifyContent: "flex-end",
     gap: "10px",
     marginTop: "15px",
   },
-
   cancelButton: {
     padding: "11px 15px",
     border: "1px solid #cbd5e1",
@@ -1505,7 +1499,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     cursor: "pointer",
   },
-
   sendAmendmentButton: {
     padding: "11px 16px",
     border: 0,
@@ -1515,7 +1508,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     cursor: "pointer",
   },
-
   rejectPanel: {
     marginTop: "18px",
     padding: "20px",
@@ -1523,7 +1515,6 @@ const styles: Record<string, React.CSSProperties> = {
     border: "2px solid #fecaca",
     background: "#fff7f7",
   },
-
   rejectConfirmButton: {
     padding: "11px 16px",
     border: 0,
@@ -1533,7 +1524,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     cursor: "pointer",
   },
-
   amendmentExisting: {
     marginTop: "16px",
     padding: "16px",
@@ -1541,7 +1531,6 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#fef3c7",
     color: "#92400e",
   },
-
   rejectedBox: {
     marginTop: "16px",
     padding: "16px",
@@ -1549,7 +1538,6 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#fee2e2",
     color: "#991b1b",
   },
-
   approvedBox: {
     marginTop: "16px",
     padding: "16px",
@@ -1562,7 +1550,6 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     gap: "15px",
   },
-
   payButton: {
     background: "#39ff14",
     color: "#052e16",
@@ -1573,7 +1560,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     cursor: "pointer",
   },
-
   statusBase: {
     height: "fit-content",
     padding: "7px 11px",
@@ -1581,34 +1567,26 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "11px",
     fontWeight: 900,
   },
-
   statusSubmitted: {
     background: "#fef3c7",
     color: "#92400e",
   },
-
   statusApproved: {
     background: "#dcfce7",
     color: "#166534",
   },
-
   statusAmendment: {
     background: "#ffedd5",
     color: "#9a3412",
   },
-
   statusRejected: {
     background: "#fee2e2",
     color: "#991b1b",
   },
-
-  muted: {
-    color: "#64748b",
-    margin: "5px 0",
+  statusResubmitted: {
+    background: "#dbeafe",
+    color: "#1d4ed8",
   },
-
-  primaryLink: {
-    color: "#0f766e",
-    fontWeight: 900,
-  },
+  muted: { color: "#64748b", margin: "5px 0" },
+  primaryLink: { color: "#0f766e", fontWeight: 900 },
 };
