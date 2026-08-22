@@ -53,6 +53,17 @@ type Timesheet = {
 
   submitted_at: string | null;
   approved_at?: string | null;
+
+  employer_proposed_start_time?: string | null;
+  employer_proposed_end_time?: string | null;
+  employer_proposed_break_minutes?: number | null;
+  employer_proposed_hours?: number | null;
+  employer_amendment_reason?: string | null;
+  amendment_requested_at?: string | null;
+  amendment_accepted_at?: string | null;
+
+  rejection_reason?: string | null;
+  rejected_at?: string | null;
 };
 
 export default function TimesheetsPage() {
@@ -78,6 +89,7 @@ export default function TimesheetsPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [actionSavingId, setActionSavingId] = useState("");
 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -435,7 +447,7 @@ export default function TimesheetsPage() {
           notes.trim() || null,
 
         status:
-          "submitted",
+          existing?.id ? "resubmitted" : "submitted",
 
         submitted_at:
           new Date().toISOString(),
@@ -458,7 +470,7 @@ export default function TimesheetsPage() {
         }
 
         setMessage(
-          "Timesheet updated and resubmitted successfully."
+          "Timesheet amended and resubmitted successfully. It is awaiting employer approval."
         );
       } else {
         const {
@@ -496,6 +508,117 @@ export default function TimesheetsPage() {
       );
     } finally {
       setSaving(false);
+    }
+  }
+
+  function calculateHoursForTimes(
+    startValue: string | null | undefined,
+    endValue: string | null | undefined,
+    breakValue: number | null | undefined
+  ) {
+    if (!startValue || !endValue) return 0;
+
+    const [startHour, startMinute] = startValue.slice(0, 5).split(":").map(Number);
+    const [endHour, endMinute] = endValue.slice(0, 5).split(":").map(Number);
+
+    if (
+      Number.isNaN(startHour) ||
+      Number.isNaN(startMinute) ||
+      Number.isNaN(endHour) ||
+      Number.isNaN(endMinute)
+    ) {
+      return 0;
+    }
+
+    let start = startHour * 60 + startMinute;
+    let end = endHour * 60 + endMinute;
+
+    if (end < start) end += 24 * 60;
+
+    const workedMinutes = Math.max(
+      0,
+      end - start - Math.max(0, Number(breakValue || 0))
+    );
+
+    return Number((workedMinutes / 60).toFixed(2));
+  }
+
+  function loadTimesheetForEditing(entry: Timesheet) {
+    const status = entry.status?.toLowerCase();
+
+    if (status === "approved") {
+      setError("Approved timesheets are locked and cannot be changed.");
+      return;
+    }
+
+    setSelectedShiftId(entry.shift_id);
+    setWorkDate(entry.work_date);
+    setStartTime(entry.start_time?.slice(0, 5) || "");
+    setEndTime(entry.end_time?.slice(0, 5) || "");
+    setBreakMinutes(String(entry.break_minutes || 0));
+    setNotes(entry.notes || "");
+
+    setMessage("Timesheet loaded above. Amend the times if needed, then submit again.");
+    setError("");
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function acceptEmployerAmendment(entry: Timesheet) {
+    const proposedStart = entry.employer_proposed_start_time?.slice(0, 5) || "";
+    const proposedEnd = entry.employer_proposed_end_time?.slice(0, 5) || "";
+    const proposedBreak = Number(entry.employer_proposed_break_minutes || 0);
+    const proposedHours =
+      Number(entry.employer_proposed_hours || 0) ||
+      calculateHoursForTimes(proposedStart, proposedEnd, proposedBreak);
+
+    if (!proposedStart || !proposedEnd || proposedHours <= 0) {
+      setError("The employer amendment is incomplete. Please ask the employer to resend the amendment.");
+      return;
+    }
+
+    const rate = Number(entry.agreed_rate || 0);
+    const newTotal = proposedHours * rate;
+
+    const confirmed = window.confirm(
+      `Accept the employer amendment?\n\n${proposedStart} - ${proposedEnd}\nBreak: ${proposedBreak} minutes\nHours: ${proposedHours.toFixed(2)}\nAmount: R${newTotal.toFixed(2)}\n\nThe timesheet will be resubmitted to the employer for final approval.`
+    );
+
+    if (!confirmed) return;
+
+    setActionSavingId(entry.id);
+    setMessage("");
+    setError("");
+
+    try {
+      const { error: updateError } = await supabase
+        .from("timesheets")
+        .update({
+          start_time: proposedStart,
+          end_time: proposedEnd,
+          break_minutes: proposedBreak,
+          hours_worked: proposedHours,
+          total_amount: newTotal,
+          status: "resubmitted",
+          amendment_accepted_at: new Date().toISOString(),
+          submitted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", entry.id)
+        .eq("locum_id", userId);
+
+      if (updateError) throw updateError;
+
+      setMessage(
+        "Employer amendment accepted. The revised timesheet has been resubmitted for final employer approval."
+      );
+
+      await loadTimesheets(userId);
+    } catch (err: any) {
+      console.error("Accept amendment error:", err);
+      setError(err?.message || "Could not accept the employer amendment.");
+    } finally {
+      setActionSavingId("");
     }
   }
 
@@ -844,123 +967,191 @@ export default function TimesheetsPage() {
             </div>
 
             <div>
-              <h2 style={styles.cardTitle}>
-                Submitted Timesheets
-              </h2>
-
+              <h2 style={styles.cardTitle}>Submitted Timesheets</h2>
               <p style={styles.helpNoMargin}>
-                Track submitted and approved
-                hours.
+                Track employer review, amendments, approval and rejection.
               </p>
             </div>
           </div>
 
           {timesheets.length === 0 ? (
-            <p style={styles.help}>
-              No timesheets submitted yet.
-            </p>
+            <p style={styles.help}>No timesheets submitted yet.</p>
           ) : (
             <div style={styles.timesheetList}>
-              {timesheets.map(
-                (entry) => {
-                  const shift =
-                    shifts.find(
-                      (item) =>
-                        item.id ===
-                        entry.shift_id
-                    );
+              {timesheets.map((entry) => {
+                const shift = shifts.find((item) => item.id === entry.shift_id);
+                const status = entry.status?.toLowerCase() || "submitted";
 
-                  const total =
-                    Number(
-                      entry.total_amount ||
-                        0
-                    ) ||
-                    Number(
-                      entry.hours_worked ||
-                        0
-                    ) *
-                      Number(
-                        entry.agreed_rate ||
-                          shift?.locum_rate ||
-                          0
-                      );
+                const total =
+                  Number(entry.total_amount || 0) ||
+                  Number(entry.hours_worked || 0) *
+                    Number(entry.agreed_rate || shift?.locum_rate || 0);
 
-                  return (
-                    <article
-                      key={entry.id}
-                      style={
-                        styles.timesheetRow
-                      }
-                    >
+                const proposedHours =
+                  Number(entry.employer_proposed_hours || 0) ||
+                  calculateHoursForTimes(
+                    entry.employer_proposed_start_time,
+                    entry.employer_proposed_end_time,
+                    entry.employer_proposed_break_minutes
+                  );
+
+                const proposedTotal =
+                  proposedHours * Number(entry.agreed_rate || shift?.locum_rate || 0);
+
+                return (
+                  <article key={entry.id} style={styles.timesheetCard}>
+                    <div style={styles.timesheetHeader}>
                       <div>
-                        <strong>
+                        <strong style={styles.timesheetTitle}>
                           {shift?.title ||
                             shift?.profession_required ||
                             "Healthcare Shift"}
                         </strong>
-
-                        <div
-                          style={
-                            styles.smallText
-                          }
-                        >
-                          {formatDate(
-                            entry.work_date
-                          )}
+                        <div style={styles.smallText}>
+                          {formatDate(entry.work_date)}
                         </div>
                       </div>
 
-                      <div>
-                        <strong>
-                          {formatTime(
-                            entry.start_time
-                          )}{" "}
-                          –{" "}
-                          {formatTime(
-                            entry.end_time
-                          )}
-                        </strong>
+                      <StatusBadge status={entry.status} />
+                    </div>
 
-                        <div
-                          style={
-                            styles.smallText
-                          }
-                        >
-                          Break:{" "}
-                          {entry.break_minutes ||
-                            0}{" "}
-                          min
-                        </div>
-                      </div>
-
-                      <div>
-                        <strong>
-                          {Number(
-                            entry.hours_worked ||
-                              0
-                          ).toFixed(2)}{" "}
-                          hrs
-                        </strong>
-
-                        <div
-                          style={
-                            styles.smallText
-                          }
-                        >
-                          R
-                          {total.toFixed(2)}
-                        </div>
-                      </div>
-
-                      <StatusBadge
-                        status={
-                          entry.status
-                        }
+                    <div style={styles.timesheetDetails}>
+                      <SummaryItem
+                        label="Submitted Time"
+                        value={`${formatTime(entry.start_time)} – ${formatTime(
+                          entry.end_time
+                        )}`}
                       />
-                    </article>
-                  );
-                }
-              )}
+                      <SummaryItem
+                        label="Break"
+                        value={`${entry.break_minutes || 0} min`}
+                      />
+                      <SummaryItem
+                        label="Hours"
+                        value={`${Number(entry.hours_worked || 0).toFixed(2)} hrs`}
+                      />
+                      <SummaryItem
+                        label="Locum Amount"
+                        value={`R${total.toFixed(2)}`}
+                        highlight
+                      />
+                    </div>
+
+                    {entry.notes && (
+                      <div style={styles.noteBox}>
+                        <strong>Your note:</strong> {entry.notes}
+                      </div>
+                    )}
+
+                    {status === "amendment_requested" && (
+                      <div style={styles.amendmentBox}>
+                        <div style={styles.amendmentHeading}>
+                          <div>
+                            <strong>Employer requested an amendment</strong>
+                            <p style={styles.helpNoMargin}>
+                              Review the proposed changes before accepting or resubmitting.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div style={styles.comparisonGrid}>
+                          <div style={styles.originalPanel}>
+                            <strong>Original submission</strong>
+                            <p>
+                              {formatTime(entry.start_time)} – {formatTime(entry.end_time)}
+                            </p>
+                            <p>Break: {entry.break_minutes || 0} min</p>
+                            <p>Hours: {Number(entry.hours_worked || 0).toFixed(2)}</p>
+                            <p>Amount: R{total.toFixed(2)}</p>
+                          </div>
+
+                          <div style={styles.proposedPanel}>
+                            <strong>Employer proposal</strong>
+                            <p>
+                              {formatTime(entry.employer_proposed_start_time)} – {" "}
+                              {formatTime(entry.employer_proposed_end_time)}
+                            </p>
+                            <p>
+                              Break: {entry.employer_proposed_break_minutes || 0} min
+                            </p>
+                            <p>Hours: {proposedHours.toFixed(2)}</p>
+                            <p>Amount: R{proposedTotal.toFixed(2)}</p>
+                          </div>
+                        </div>
+
+                        <div style={styles.reasonBox}>
+                          <strong>Employer reason:</strong>
+                          <div style={{ marginTop: 6 }}>
+                            {entry.employer_amendment_reason ||
+                              "No reason was supplied."}
+                          </div>
+                        </div>
+
+                        <div style={styles.actionButtons}>
+                          <button
+                            type="button"
+                            onClick={() => loadTimesheetForEditing(entry)}
+                            style={styles.secondaryButton}
+                          >
+                            ✏️ Amend & Resubmit
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={actionSavingId === entry.id}
+                            onClick={() => acceptEmployerAmendment(entry)}
+                            style={styles.acceptButton}
+                          >
+                            {actionSavingId === entry.id
+                              ? "Accepting..."
+                              : "✓ Accept Employer Amendment"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {status === "rejected" && (
+                      <div style={styles.rejectedBox}>
+                        <strong>Timesheet rejected by employer</strong>
+                        <p>
+                          {entry.rejection_reason ||
+                            "The employer did not provide a rejection reason."}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => loadTimesheetForEditing(entry)}
+                          style={styles.secondaryButton}
+                        >
+                          Amend & Resubmit Timesheet
+                        </button>
+                      </div>
+                    )}
+
+                    {status === "approved" && (
+                      <div style={styles.approvedBox}>
+                        <strong>✓ Approved by employer</strong>
+                        <span>
+                          This timesheet is locked and can proceed to invoicing/payment.
+                        </span>
+                      </div>
+                    )}
+
+                    {status === "resubmitted" && (
+                      <div style={styles.pendingBox}>
+                        <strong>Resubmitted</strong>
+                        <span>Waiting for the employer's final review and approval.</span>
+                      </div>
+                    )}
+
+                    {status === "submitted" && (
+                      <div style={styles.pendingBox}>
+                        <strong>Submitted</strong>
+                        <span>Waiting for employer review.</span>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
             </div>
           )}
         </section>
@@ -1020,12 +1211,13 @@ function StatusBadge({
 }: {
   status: string;
 }) {
-  const normalized =
-    status?.toLowerCase() ||
-    "submitted";
+  const normalized = status?.toLowerCase() || "submitted";
 
-  let badgeStyle: React.CSSProperties =
-    styles.badge;
+  let badgeStyle: React.CSSProperties = {
+    ...styles.badge,
+    background: "#fef3c7",
+    color: "#92400e",
+  };
 
   if (normalized === "approved") {
     badgeStyle = {
@@ -1033,26 +1225,29 @@ function StatusBadge({
       background: "#dcfce7",
       color: "#166534",
     };
-  } else if (
-    normalized === "rejected" ||
-    normalized === "declined"
-  ) {
+  } else if (normalized === "amendment_requested") {
+    badgeStyle = {
+      ...styles.badge,
+      background: "#ffedd5",
+      color: "#9a3412",
+    };
+  } else if (normalized === "resubmitted") {
+    badgeStyle = {
+      ...styles.badge,
+      background: "#dbeafe",
+      color: "#1d4ed8",
+    };
+  } else if (normalized === "rejected" || normalized === "declined") {
     badgeStyle = {
       ...styles.badge,
       background: "#fee2e2",
       color: "#991b1b",
     };
-  } else {
-    badgeStyle = {
-      ...styles.badge,
-      background: "#fef3c7",
-      color: "#92400e",
-    };
   }
 
   return (
     <span style={badgeStyle}>
-      {normalized.toUpperCase()}
+      {normalized.replaceAll("_", " " ).toUpperCase()}
     </span>
   );
 }
@@ -1305,16 +1500,145 @@ const styles: Record<
     gap: "12px",
   },
 
-  timesheetRow: {
+  timesheetCard: {
+    padding: "20px",
+    border: "1px solid #e2e8f0",
+    borderRadius: "16px",
+    background: "#ffffff",
+  },
+
+  timesheetHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: "14px",
+  },
+
+  timesheetTitle: {
+    fontSize: "18px",
+    color: "#0f172a",
+  },
+
+  timesheetDetails: {
+    marginTop: "16px",
     padding: "16px",
-    border:
-      "1px solid #e2e8f0",
     borderRadius: "14px",
+    background: "#f8fafc",
     display: "grid",
-    gridTemplateColumns:
-      "2fr 1.3fr 1fr auto",
-    alignItems: "center",
-    gap: "15px",
+    gridTemplateColumns: "repeat(auto-fit,minmax(145px,1fr))",
+    gap: "14px",
+  },
+
+  noteBox: {
+    marginTop: "14px",
+    padding: "12px 14px",
+    borderRadius: "12px",
+    background: "#f8fafc",
+    color: "#475569",
+  },
+
+  amendmentBox: {
+    marginTop: "16px",
+    padding: "18px",
+    borderRadius: "16px",
+    border: "2px solid #f59e0b",
+    background: "#fffdf5",
+  },
+
+  amendmentHeading: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: "12px",
+  },
+
+  comparisonGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
+    gap: "14px",
+    marginTop: "16px",
+  },
+
+  originalPanel: {
+    padding: "14px",
+    borderRadius: "12px",
+    background: "#f8fafc",
+    color: "#334155",
+  },
+
+  proposedPanel: {
+    padding: "14px",
+    borderRadius: "12px",
+    background: "#ffedd5",
+    color: "#9a3412",
+  },
+
+  reasonBox: {
+    marginTop: "14px",
+    padding: "14px",
+    borderRadius: "12px",
+    background: "#fef3c7",
+    color: "#92400e",
+  },
+
+  actionButtons: {
+    display: "flex",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: "10px",
+    marginTop: "16px",
+  },
+
+  secondaryButton: {
+    padding: "12px 16px",
+    borderRadius: "11px",
+    border: "1px solid #cbd5e1",
+    background: "white",
+    color: "#334155",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+
+  acceptButton: {
+    padding: "12px 16px",
+    borderRadius: "11px",
+    border: "2px solid #22c55e",
+    background: "#39ff14",
+    color: "#052e16",
+    fontWeight: 900,
+    cursor: "pointer",
+    boxShadow: "0 0 14px rgba(57,255,20,0.28)",
+  },
+
+  rejectedBox: {
+    marginTop: "16px",
+    padding: "16px",
+    borderRadius: "14px",
+    background: "#fee2e2",
+    color: "#991b1b",
+  },
+
+  approvedBox: {
+    marginTop: "16px",
+    padding: "14px 16px",
+    borderRadius: "14px",
+    background: "#dcfce7",
+    color: "#166534",
+    display: "flex",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: "10px",
+  },
+
+  pendingBox: {
+    marginTop: "16px",
+    padding: "14px 16px",
+    borderRadius: "14px",
+    background: "#eff6ff",
+    color: "#1e40af",
+    display: "flex",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: "10px",
   },
 
   smallText: {
