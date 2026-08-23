@@ -173,17 +173,19 @@ export default function InvoicesPage() {
     return rate * hours;
   }
 
+  function getPlatformFee(item: Timesheet) {
+    return Number((getGrossAmount(item) * 0.1).toFixed(2));
+  }
+
   function getLocumAmount(item: Timesheet) {
-  return getGrossAmount(item);
-}
+    return Number(
+      (getGrossAmount(item) - getPlatformFee(item)).toFixed(2),
+    );
+  }
 
-function getPlatformFee(item: Timesheet) {
-  return getLocumAmount(item) * 0.1;
-}
-
-function getEmployerTotal(item: Timesheet) {
-  return getLocumAmount(item) + getPlatformFee(item);
-}
+  function getEmployerTotal(item: Timesheet) {
+    return Number(getGrossAmount(item).toFixed(2));
+  }
 
   function invoiceNumber(item: Timesheet) {
     const date =
@@ -625,7 +627,7 @@ function getEmployerTotal(item: Timesheet) {
             <section class="totals">
 
               <div class="total-row">
-                <span>Gross shift amount</span>
+                <span>Invoice total / Employer pays</span>
                 <strong>
                   ${escapeHtml(formatMoney(gross))}
                 </strong>
@@ -871,7 +873,7 @@ function getEmployerTotal(item: Timesheet) {
                   <hr style={styles.hr} />
 
                   <div style={styles.moneyRow}>
-                    <span>Gross Shift Amount</span>
+                    <span>Invoice Total / Employer Pays</span>
                     <strong>
                       {formatMoney(gross)}
                     </strong>
