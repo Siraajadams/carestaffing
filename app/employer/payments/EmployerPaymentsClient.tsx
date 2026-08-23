@@ -25,20 +25,12 @@ export default function EmployerPaymentsClient() {
     searchParams.get("timesheet_id") ||
     "";
 
-  const [timesheet, setTimesheet] =
-    useState<Timesheet | null>(null);
+  const [timesheet, setTimesheet] = useState<Timesheet | null>(null);
+  const [loading, setLoading] = useState(Boolean(timesheetId));
+  const [paying, setPaying] = useState(false);
 
-  const [loading, setLoading] =
-    useState(Boolean(timesheetId));
-
-  const [paying, setPaying] =
-    useState(false);
-
-  const [error, setError] =
-    useState("");
-
-  const [message, setMessage] =
-    useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
     if (timesheetId) {
@@ -64,23 +56,22 @@ export default function EmployerPaymentsClient() {
         return;
       }
 
-      const { data, error: loadError } =
-        await supabase
-          .from("timesheets")
-          .select(
-            `
-            id,
-            shift_id,
-            locum_id,
-            work_date,
-            hours_worked,
-            agreed_rate,
-            total_amount,
-            status
+      const { data, error: loadError } = await supabase
+        .from("timesheets")
+        .select(
           `
-          )
-          .eq("id", id)
-          .maybeSingle();
+          id,
+          shift_id,
+          locum_id,
+          work_date,
+          hours_worked,
+          agreed_rate,
+          total_amount,
+          status
+        `
+        )
+        .eq("id", id)
+        .maybeSingle();
 
       if (loadError) {
         throw loadError;
@@ -94,10 +85,7 @@ export default function EmployerPaymentsClient() {
 
       setTimesheet(data as Timesheet);
     } catch (err: any) {
-      console.error(
-        "Load employer payment error:",
-        err
-      );
+      console.error("Load employer payment error:", err);
 
       setError(
         err?.message ||
@@ -109,20 +97,50 @@ export default function EmployerPaymentsClient() {
   }
 
   function invoiceAmount(row: Timesheet) {
-    const storedAmount =
-      Number(row.total_amount || 0);
+    const storedAmount = Number(row.total_amount || 0);
 
     if (storedAmount > 0) {
       return storedAmount;
     }
 
-    const hours =
-      Number(row.hours_worked || 0);
-
-    const rate =
-      Number(row.agreed_rate || 0);
+    const hours = Number(row.hours_worked || 0);
+    const rate = Number(row.agreed_rate || 0);
 
     return hours * rate;
+  }
+
+  async function getFreshAccessToken() {
+    /*
+     * First try the current session.
+     */
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError) {
+      console.error("Get session error:", sessionError);
+    }
+
+    if (session?.access_token) {
+      return session.access_token;
+    }
+
+    /*
+     * If the browser session needs refreshing,
+     * attempt to refresh it WITHOUT signing the user out.
+     */
+    const {
+      data: { session: refreshedSession },
+      error: refreshError,
+    } = await supabase.auth.refreshSession();
+
+    if (refreshError) {
+      console.error("Session refresh error:", refreshError);
+      return null;
+    }
+
+    return refreshedSession?.access_token || null;
   }
 
   async function payInvoice() {
@@ -131,13 +149,8 @@ export default function EmployerPaymentsClient() {
       return;
     }
 
-    if (
-      timesheet.status?.toLowerCase() !==
-      "approved"
-    ) {
-      setError(
-        "Only an approved timesheet can be paid."
-      );
+    if (timesheet.status?.toLowerCase() !== "approved") {
+      setError("Only an approved timesheet can be paid.");
       return;
     }
 
@@ -146,35 +159,20 @@ export default function EmployerPaymentsClient() {
     setMessage("");
 
     try {
-      /*
-       * Get the current Supabase session.
-       * We need the access token because the Stripe
-       * server route authenticates the employer.
-       */
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
+      const accessToken = await getFreshAccessToken();
 
-      if (sessionError) {
-        console.error(
-          "Supabase session error:",
-          sessionError
+      if (!accessToken) {
+        setError(
+          "Your login session could not be verified. " +
+            "Please refresh the page or log in again."
         );
 
-        throw new Error(
-          "Could not verify your login session. Please log in again."
-        );
-      }
-
-      if (!session?.access_token) {
-        await supabase.auth.signOut();
-        router.replace("/login");
+        setPaying(false);
         return;
       }
 
       console.log(
-        "Creating Stripe checkout:",
+        "Creating Stripe checkout for timesheet:",
         timesheet.id
       );
 
@@ -184,24 +182,17 @@ export default function EmployerPaymentsClient() {
           method: "POST",
 
           headers: {
-            "Content-Type":
-              "application/json",
-
-            Authorization:
-              `Bearer ${session.access_token}`,
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
           },
 
           body: JSON.stringify({
-            timesheetId:
-              timesheet.id,
+            timesheetId: timesheet.id,
           }),
         }
       );
 
-      const payload =
-        await response
-          .json()
-          .catch(() => ({}));
+      const payload = await response.json().catch(() => ({}));
 
       console.log(
         "Stripe checkout response:",
@@ -209,56 +200,42 @@ export default function EmployerPaymentsClient() {
         payload
       );
 
+      /*
+       * IMPORTANT:
+       * We DO NOT sign the employer out on a 401.
+       */
       if (!response.ok) {
-        /*
-         * Authentication problem
-         */
         if (response.status === 401) {
-          await supabase.auth.signOut();
-
-          router.replace("/login");
-
-          return;
+          throw new Error(
+            "The payment server could not verify your employer session. " +
+              "You are still logged in. Please refresh the page and try again."
+          );
         }
 
-        /*
-         * Employer does not own this shift
-         */
         if (response.status === 403) {
           throw new Error(
             payload?.error ||
-              "You are not authorised to pay this invoice."
+              "This employer account is not authorised to pay this invoice."
           );
         }
 
-        /*
-         * Locum has not connected Stripe
-         */
         if (
-          payload?.code ===
-          "LOCUM_STRIPE_NOT_CONNECTED"
+          payload?.code === "LOCUM_STRIPE_NOT_CONNECTED"
         ) {
           throw new Error(
             "The locum has not completed Stripe payout onboarding yet. " +
-              "The locum must connect their Stripe account before payment can be processed."
+              "The locum must connect their Stripe account before this invoice can be paid."
           );
         }
 
-        /*
-         * Stripe Connect exists but payout is not ready
-         */
         if (
-          payload?.code ===
-          "LOCUM_PAYOUTS_NOT_ENABLED"
+          payload?.code === "LOCUM_PAYOUTS_NOT_ENABLED"
         ) {
           throw new Error(
-            "The locum's Stripe account is connected but is not yet enabled to receive payouts."
+            "The locum's Stripe account exists but is not yet enabled to receive payouts."
           );
         }
 
-        /*
-         * Invoice already paid
-         */
         if (response.status === 409) {
           throw new Error(
             payload?.error ||
@@ -280,27 +257,16 @@ export default function EmployerPaymentsClient() {
         payload?.sessionUrl;
 
       if (!checkoutUrl) {
-        console.error(
-          "Stripe returned no checkout URL:",
-          payload
-        );
-
         throw new Error(
-          "Stripe created the payment but returned no checkout URL."
+          "Stripe created the payment session but returned no checkout URL."
         );
       }
 
-      setMessage(
-        "Payment session created. Opening Stripe..."
-      );
+      setMessage("Payment session created. Opening Stripe...");
 
-      window.location.href =
-        checkoutUrl;
+      window.location.assign(checkoutUrl);
     } catch (err: any) {
-      console.error(
-        "Employer Stripe payment error:",
-        err
-      );
+      console.error("Employer Stripe payment error:", err);
 
       setError(
         err?.message ||
@@ -311,91 +277,57 @@ export default function EmployerPaymentsClient() {
     }
   }
 
-  const amount =
-    timesheet
-      ? invoiceAmount(timesheet)
-      : 0;
+  const amount = timesheet ? invoiceAmount(timesheet) : 0;
 
-  const careStaffingFee =
-    amount * 0.1;
-
-  const locumPayout =
-    amount - careStaffingFee;
+  const careStaffingFee = amount * 0.1;
+  const locumPayout = amount - careStaffingFee;
 
   return (
     <main style={styles.page}>
       <div style={styles.container}>
-        <Link
-          href="/employer"
-          style={styles.back}
-        >
+        <Link href="/employer" style={styles.back}>
           ← Back to Employer Portal
         </Link>
 
         <nav style={styles.nav}>
-          <Link
-            href="/employer"
-            style={styles.navLink}
-          >
+          <Link href="/employer" style={styles.navLink}>
             Post Shift
           </Link>
 
-          <Link
-            href="/employer/shifts"
-            style={styles.navLink}
-          >
+          <Link href="/employer/shifts" style={styles.navLink}>
             My Shifts
           </Link>
 
-          <Link
-            href="/employer/applicants"
-            style={styles.navLink}
-          >
+          <Link href="/employer/applicants" style={styles.navLink}>
             Applicants
           </Link>
 
-          <Link
-            href="/employer/timesheets"
-            style={styles.navLink}
-          >
+          <Link href="/employer/timesheets" style={styles.navLink}>
             Timesheets
           </Link>
 
-          <Link
-            href="/employer/invoices"
-            style={styles.navLink}
-          >
+          <Link href="/employer/invoices" style={styles.navLink}>
             Invoices
           </Link>
 
-          <Link
-            href="/employer/payments"
-            style={styles.active}
-          >
+          <Link href="/employer/payments" style={styles.active}>
             Payments
           </Link>
 
-          <Link
-            href="/employer/profile"
-            style={styles.navLink}
-          >
+          <Link href="/employer/profile" style={styles.navLink}>
             Organisation Profile
           </Link>
         </nav>
 
         <section style={styles.hero}>
-          <p style={styles.eyebrow}>
-            SECURE PAYMENT
-          </p>
+          <p style={styles.eyebrow}>SECURE PAYMENT</p>
 
           <h1 style={styles.title}>
             Employer Payments
           </h1>
 
           <p style={styles.subtitle}>
-            Pay approved CareStaffing
-            invoices securely through
-            Stripe.
+            Pay approved CareStaffing invoices securely through Stripe.
           </p>
         </section>
 
@@ -413,18 +345,12 @@ export default function EmployerPaymentsClient() {
 
         {!timesheetId ? (
           <section style={styles.card}>
-            <h2
-              style={{
-                marginTop: 0,
-              }}
-            >
+            <h2 style={{ marginTop: 0 }}>
               Choose an approved invoice
             </h2>
 
             <p style={styles.muted}>
-              Open the Invoices page and
-              select the approved invoice
-              you want to pay.
+              Open the Invoices page and select the approved invoice you want to pay.
             </p>
 
             <Link
@@ -446,29 +372,17 @@ export default function EmployerPaymentsClient() {
           <section style={styles.card}>
             <div style={styles.topRow}>
               <div>
-                <p
-                  style={
-                    styles.smallLabel
-                  }
-                >
+                <p style={styles.smallLabel}>
                   PAYMENT STATUS
                 </p>
 
-                <h2
-                  style={{
-                    margin:
-                      "5px 0 0",
-                  }}
-                >
+                <h2 style={{ margin: "5px 0 0" }}>
                   Invoice Payment
                 </h2>
               </div>
 
               <span style={styles.badge}>
-                {(
-                  timesheet.status ||
-                  "unknown"
-                ).toUpperCase()}
+                {(timesheet.status || "unknown").toUpperCase()}
               </span>
             </div>
 
@@ -481,9 +395,7 @@ export default function EmployerPaymentsClient() {
 
               <MoneyBox
                 label="CareStaffing Fee (10%)"
-                value={
-                  careStaffingFee
-                }
+                value={careStaffingFee}
               />
 
               <MoneyBox
@@ -492,14 +404,8 @@ export default function EmployerPaymentsClient() {
               />
             </div>
 
-            <div
-              style={
-                styles.paymentExplanation
-              }
-            >
-              <strong>
-                How the payment works
-              </strong>
+            <div style={styles.paymentExplanation}>
+              <strong>How the payment works</strong>
 
               <p
                 style={{
@@ -508,70 +414,32 @@ export default function EmployerPaymentsClient() {
                 }}
               >
                 The employer pays{" "}
-                <strong>
-                  R
-                  {amount.toFixed(
-                    2
-                  )}
-                </strong>{" "}
-                once. CareStaffing
-                retains{" "}
-                <strong>
-                  R
-                  {careStaffingFee.toFixed(
-                    2
-                  )}
-                </strong>{" "}
+                <strong>R{amount.toFixed(2)}</strong>{" "}
+                once. CareStaffing retains{" "}
+                <strong>R{careStaffingFee.toFixed(2)}</strong>{" "}
                 and the locum receives{" "}
-                <strong>
-                  R
-                  {locumPayout.toFixed(
-                    2
-                  )}
-                </strong>
-                .
+                <strong>R{locumPayout.toFixed(2)}</strong>.
               </p>
             </div>
 
-            {timesheet.status?.toLowerCase() !==
-            "approved" ? (
-              <div
-                style={
-                  styles.warning
-                }
-              >
-                This timesheet is not
-                approved yet. Payment
-                remains locked until
-                employer approval is
-                complete.
+            {timesheet.status?.toLowerCase() !== "approved" ? (
+              <div style={styles.warning}>
+                This timesheet is not approved yet. Payment remains locked until employer approval is complete.
               </div>
             ) : (
               <button
                 type="button"
-                onClick={() =>
-                  void payInvoice()
-                }
+                onClick={() => void payInvoice()}
                 disabled={paying}
                 style={{
                   ...styles.payButton,
-
-                  opacity:
-                    paying
-                      ? 0.6
-                      : 1,
-
-                  cursor:
-                    paying
-                      ? "not-allowed"
-                      : "pointer",
+                  opacity: paying ? 0.6 : 1,
+                  cursor: paying ? "not-allowed" : "pointer",
                 }}
               >
                 {paying
                   ? "Opening Stripe..."
-                  : `💳 PAY R${amount.toFixed(
-                      2
-                    )} WITH STRIPE`}
+                  : `💳 PAY R${amount.toFixed(2)} WITH STRIPE`}
               </button>
             )}
           </section>
@@ -594,41 +462,26 @@ function MoneyBox({
     <div
       style={{
         ...styles.moneyBox,
-
-        ...(highlight
-          ? styles.moneyHighlight
-          : {}),
+        ...(highlight ? styles.moneyHighlight : {}),
       }}
     >
-      <span
-        style={
-          styles.smallLabel
-        }
-      >
+      <span style={styles.smallLabel}>
         {label}
       </span>
 
-      <strong
-        style={{
-          fontSize: "22px",
-        }}
-      >
+      <strong style={{ fontSize: "22px" }}>
         R{value.toFixed(2)}
       </strong>
     </div>
   );
 }
 
-const styles: Record<
-  string,
-  React.CSSProperties
-> = {
+const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
     background: "#f1f5f9",
     padding: "28px 20px 60px",
-    fontFamily:
-      "Arial, sans-serif",
+    fontFamily: "Arial, sans-serif",
   },
 
   container: {
@@ -650,8 +503,6 @@ const styles: Record<
     padding: "10px",
     borderRadius: "16px",
     background: "white",
-    boxShadow:
-      "0 8px 24px rgba(15,23,42,.05)",
   },
 
   navLink: {
@@ -672,8 +523,7 @@ const styles: Record<
   },
 
   hero: {
-    background:
-      "linear-gradient(135deg,#0f172a,#0f766e)",
+    background: "linear-gradient(135deg,#0f172a,#0f766e)",
     color: "white",
     padding: "34px",
     borderRadius: "28px",
@@ -701,14 +551,12 @@ const styles: Record<
     background: "white",
     padding: "26px",
     borderRadius: "20px",
-    boxShadow:
-      "0 8px 24px rgba(15,23,42,.06)",
+    boxShadow: "0 8px 24px rgba(15,23,42,.06)",
   },
 
   topRow: {
     display: "flex",
-    justifyContent:
-      "space-between",
+    justifyContent: "space-between",
     gap: "15px",
     alignItems: "flex-start",
     flexWrap: "wrap",
@@ -726,8 +574,7 @@ const styles: Record<
 
   moneyGrid: {
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit,minmax(180px,1fr))",
+    gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
     gap: "12px",
     marginTop: "20px",
   },
@@ -776,10 +623,8 @@ const styles: Record<
     width: "100%",
     background: "#39ff14",
     color: "#052e16",
-    border:
-      "2px solid #22c55e",
-    boxShadow:
-      "0 0 22px rgba(57,255,20,.40)",
+    border: "2px solid #22c55e",
+    boxShadow: "0 0 22px rgba(57,255,20,.40)",
     padding: "17px 20px",
     borderRadius: "12px",
     fontWeight: 900,
