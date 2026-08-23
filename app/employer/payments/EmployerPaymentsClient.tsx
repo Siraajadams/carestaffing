@@ -52,9 +52,13 @@ export default function EmployerPaymentsClient() {
       } = await supabase.auth.getUser();
 
       if (authError || !user) {
+        console.error("Employer authentication error:", authError);
+
         router.replace("/login");
         return;
       }
+
+      console.log("Employer logged in:", user.id);
 
       const { data, error: loadError } = await supabase
         .from("timesheets")
@@ -83,6 +87,8 @@ export default function EmployerPaymentsClient() {
         return;
       }
 
+      console.log("Timesheet loaded:", data);
+
       setTimesheet(data as Timesheet);
     } catch (err: any) {
       console.error("Load employer payment error:", err);
@@ -109,39 +115,73 @@ export default function EmployerPaymentsClient() {
     return hours * rate;
   }
 
-  async function getFreshAccessToken() {
-    /*
-     * First try the current session.
-     */
-    const {
-      data: { session },
-      error: sessionError,
-    } = await supabase.auth.getSession();
+  /*
+   * ============================================================
+   * GET CURRENT AUTH TOKEN
+   * ============================================================
+   *
+   * We deliberately DO NOT call refreshSession() here.
+   *
+   * The browser already has the employer login session.
+   * We only read the existing access token and send it to
+   * /api/stripe/create-checkout.
+   */
+  async function getAccessToken() {
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-    if (sessionError) {
-      console.error("Get session error:", sessionError);
-    }
+      if (sessionError) {
+        console.error(
+          "Could not read Supabase session:",
+          sessionError
+        );
 
-    if (session?.access_token) {
+        return null;
+      }
+
+      if (!session) {
+        console.error("No Supabase browser session exists.");
+        return null;
+      }
+
+      if (!session.access_token) {
+        console.error(
+          "Supabase session exists but has no access token."
+        );
+
+        return null;
+      }
+
+      console.log(
+        "Employer access token available:",
+        session.access_token.length,
+        "characters"
+      );
+
+      console.log(
+        "Session user:",
+        session.user?.id
+      );
+
       return session.access_token;
-    }
+    } catch (err) {
+      console.error(
+        "Unexpected getAccessToken error:",
+        err
+      );
 
-    /*
-     * If the browser session needs refreshing,
-     * attempt to refresh it WITHOUT signing the user out.
-     */
-    const {
-      data: { session: refreshedSession },
-      error: refreshError,
-    } = await supabase.auth.refreshSession();
-
-    if (refreshError) {
-      console.error("Session refresh error:", refreshError);
       return null;
     }
-
-    return refreshedSession?.access_token || null;
   }
+
+  /*
+   * ============================================================
+   * PAY INVOICE
+   * ============================================================
+   */
 
   async function payInvoice() {
     if (!timesheet) {
@@ -150,7 +190,9 @@ export default function EmployerPaymentsClient() {
     }
 
     if (timesheet.status?.toLowerCase() !== "approved") {
-      setError("Only an approved timesheet can be paid.");
+      setError(
+        "Only an approved timesheet can be paid."
+      );
       return;
     }
 
@@ -159,12 +201,15 @@ export default function EmployerPaymentsClient() {
     setMessage("");
 
     try {
-      const accessToken = await getFreshAccessToken();
+      /*
+       * Get currently stored Supabase access token.
+       */
+      const accessToken = await getAccessToken();
 
       if (!accessToken) {
         setError(
-          "Your login session could not be verified. " +
-            "Please refresh the page or log in again."
+          "Your CareStaffing login session could not be found. " +
+            "Please log in again as an Employer & Organisation."
         );
 
         setPaying(false);
@@ -176,6 +221,9 @@ export default function EmployerPaymentsClient() {
         timesheet.id
       );
 
+      /*
+       * Send token to secure Stripe API.
+       */
       const response = await fetch(
         "/api/stripe/create-checkout",
         {
@@ -183,35 +231,76 @@ export default function EmployerPaymentsClient() {
 
           headers: {
             "Content-Type": "application/json",
+
             Authorization: `Bearer ${accessToken}`,
           },
 
           body: JSON.stringify({
             timesheetId: timesheet.id,
+            timesheet_id: timesheet.id,
           }),
         }
       );
 
-      const payload = await response.json().catch(() => ({}));
+      /*
+       * Read response safely.
+       */
+      let payload: any = {};
+
+      try {
+        payload = await response.json();
+      } catch (jsonError) {
+        console.error(
+          "Stripe response was not valid JSON:",
+          jsonError
+        );
+      }
 
       console.log(
-        "Stripe checkout response:",
-        response.status,
+        "Stripe checkout response status:",
+        response.status
+      );
+
+      console.log(
+        "Stripe checkout response payload:",
         payload
       );
 
       /*
-       * IMPORTANT:
-       * We DO NOT sign the employer out on a 401.
+       * ========================================================
+       * ERROR HANDLING
+       * ========================================================
        */
+
       if (!response.ok) {
+        /*
+         * 401:
+         * Show the REAL reason returned by the server.
+         *
+         * IMPORTANT:
+         * Do not automatically sign the employer out.
+         */
         if (response.status === 401) {
+          console.error(
+            "PAYMENT AUTHENTICATION FAILURE:",
+            payload
+          );
+
+          const detail =
+            payload?.detail ||
+            payload?.message ||
+            payload?.error ||
+            "Unknown authentication failure.";
+
           throw new Error(
-            "The payment server could not verify your employer session. " +
-              "You are still logged in. Please refresh the page and try again."
+            `Authentication failed: ${detail}`
           );
         }
 
+        /*
+         * 403:
+         * Logged-in user exists but does not own this shift.
+         */
         if (response.status === 403) {
           throw new Error(
             payload?.error ||
@@ -219,8 +308,12 @@ export default function EmployerPaymentsClient() {
           );
         }
 
+        /*
+         * Locum has not connected Stripe.
+         */
         if (
-          payload?.code === "LOCUM_STRIPE_NOT_CONNECTED"
+          payload?.code ===
+          "LOCUM_STRIPE_NOT_CONNECTED"
         ) {
           throw new Error(
             "The locum has not completed Stripe payout onboarding yet. " +
@@ -228,14 +321,35 @@ export default function EmployerPaymentsClient() {
           );
         }
 
+        /*
+         * Locum Stripe account exists,
+         * but payouts are not enabled.
+         */
         if (
-          payload?.code === "LOCUM_PAYOUTS_NOT_ENABLED"
+          payload?.code ===
+          "LOCUM_PAYOUTS_NOT_ENABLED"
         ) {
           throw new Error(
             "The locum's Stripe account exists but is not yet enabled to receive payouts."
           );
         }
 
+        /*
+         * Stripe account ID invalid.
+         */
+        if (
+          payload?.code ===
+          "LOCUM_STRIPE_ACCOUNT_INVALID"
+        ) {
+          throw new Error(
+            "The locum's Stripe Connect account could not be verified. " +
+              "The locum may need to reconnect Stripe."
+          );
+        }
+
+        /*
+         * Already paid.
+         */
         if (response.status === 409) {
           throw new Error(
             payload?.error ||
@@ -243,12 +357,22 @@ export default function EmployerPaymentsClient() {
           );
         }
 
+        /*
+         * Other server-side error.
+         */
         throw new Error(
-          payload?.error ||
+          payload?.detail ||
+            payload?.error ||
             payload?.message ||
-            "Stripe checkout could not be created."
+            `Stripe checkout failed with HTTP ${response.status}.`
         );
       }
+
+      /*
+       * ========================================================
+       * SUCCESS
+       * ========================================================
+       */
 
       const checkoutUrl =
         payload?.url ||
@@ -257,16 +381,33 @@ export default function EmployerPaymentsClient() {
         payload?.sessionUrl;
 
       if (!checkoutUrl) {
+        console.error(
+          "Stripe returned no checkout URL:",
+          payload
+        );
+
         throw new Error(
           "Stripe created the payment session but returned no checkout URL."
         );
       }
 
-      setMessage("Payment session created. Opening Stripe...");
+      console.log(
+        "Stripe Checkout URL received."
+      );
 
+      setMessage(
+        "Payment session created. Opening secure Stripe Checkout..."
+      );
+
+      /*
+       * Send employer to Stripe.
+       */
       window.location.assign(checkoutUrl);
     } catch (err: any) {
-      console.error("Employer Stripe payment error:", err);
+      console.error(
+        "Employer Stripe payment error:",
+        err
+      );
 
       setError(
         err?.message ||
@@ -277,50 +418,94 @@ export default function EmployerPaymentsClient() {
     }
   }
 
-  const amount = timesheet ? invoiceAmount(timesheet) : 0;
+  /*
+   * ============================================================
+   * AMOUNTS
+   * ============================================================
+   */
 
-  const careStaffingFee = amount * 0.1;
-  const locumPayout = amount - careStaffingFee;
+  const amount =
+    timesheet
+      ? invoiceAmount(timesheet)
+      : 0;
+
+  const careStaffingFee =
+    amount * 0.1;
+
+  const locumPayout =
+    amount - careStaffingFee;
+
+  /*
+   * ============================================================
+   * PAGE
+   * ============================================================
+   */
 
   return (
     <main style={styles.page}>
       <div style={styles.container}>
-        <Link href="/employer" style={styles.back}>
+        <Link
+          href="/employer"
+          style={styles.back}
+        >
           ← Back to Employer Portal
         </Link>
 
         <nav style={styles.nav}>
-          <Link href="/employer" style={styles.navLink}>
+          <Link
+            href="/employer"
+            style={styles.navLink}
+          >
             Post Shift
           </Link>
 
-          <Link href="/employer/shifts" style={styles.navLink}>
+          <Link
+            href="/employer/shifts"
+            style={styles.navLink}
+          >
             My Shifts
           </Link>
 
-          <Link href="/employer/applicants" style={styles.navLink}>
+          <Link
+            href="/employer/applicants"
+            style={styles.navLink}
+          >
             Applicants
           </Link>
 
-          <Link href="/employer/timesheets" style={styles.navLink}>
+          <Link
+            href="/employer/timesheets"
+            style={styles.navLink}
+          >
             Timesheets
           </Link>
 
-          <Link href="/employer/invoices" style={styles.navLink}>
+          <Link
+            href="/employer/invoices"
+            style={styles.navLink}
+          >
             Invoices
           </Link>
 
-          <Link href="/employer/payments" style={styles.active}>
+          <Link
+            href="/employer/payments"
+            style={styles.active}
+          >
             Payments
           </Link>
 
-          <Link href="/employer/profile" style={styles.navLink}>
+          <Link
+            href="/employer/profile"
+            style={styles.navLink}
+          >
             Organisation Profile
           </Link>
         </nav>
 
         <section style={styles.hero}>
-          <p style={styles.eyebrow}>SECURE PAYMENT</p>
+          <p style={styles.eyebrow}>
+            SECURE PAYMENT
+          </p>
 
           <h1 style={styles.title}>
             Employer Payments
@@ -405,7 +590,9 @@ export default function EmployerPaymentsClient() {
             </div>
 
             <div style={styles.paymentExplanation}>
-              <strong>How the payment works</strong>
+              <strong>
+                How the payment works
+              </strong>
 
               <p
                 style={{
@@ -414,11 +601,17 @@ export default function EmployerPaymentsClient() {
                 }}
               >
                 The employer pays{" "}
-                <strong>R{amount.toFixed(2)}</strong>{" "}
+                <strong>
+                  R{amount.toFixed(2)}
+                </strong>{" "}
                 once. CareStaffing retains{" "}
-                <strong>R{careStaffingFee.toFixed(2)}</strong>{" "}
+                <strong>
+                  R{careStaffingFee.toFixed(2)}
+                </strong>{" "}
                 and the locum receives{" "}
-                <strong>R{locumPayout.toFixed(2)}</strong>.
+                <strong>
+                  R{locumPayout.toFixed(2)}
+                </strong>.
               </p>
             </div>
 
@@ -429,17 +622,29 @@ export default function EmployerPaymentsClient() {
             ) : (
               <button
                 type="button"
-                onClick={() => void payInvoice()}
+                onClick={() =>
+                  void payInvoice()
+                }
                 disabled={paying}
                 style={{
                   ...styles.payButton,
-                  opacity: paying ? 0.6 : 1,
-                  cursor: paying ? "not-allowed" : "pointer",
+
+                  opacity:
+                    paying
+                      ? 0.6
+                      : 1,
+
+                  cursor:
+                    paying
+                      ? "not-allowed"
+                      : "pointer",
                 }}
               >
                 {paying
                   ? "Opening Stripe..."
-                  : `💳 PAY R${amount.toFixed(2)} WITH STRIPE`}
+                  : `💳 PAY R${amount.toFixed(
+                      2
+                    )} WITH STRIPE`}
               </button>
             )}
           </section>
@@ -448,6 +653,12 @@ export default function EmployerPaymentsClient() {
     </main>
   );
 }
+
+/*
+ * ============================================================
+ * MONEY BOX
+ * ============================================================
+ */
 
 function MoneyBox({
   label,
@@ -462,26 +673,43 @@ function MoneyBox({
     <div
       style={{
         ...styles.moneyBox,
-        ...(highlight ? styles.moneyHighlight : {}),
+
+        ...(highlight
+          ? styles.moneyHighlight
+          : {}),
       }}
     >
       <span style={styles.smallLabel}>
         {label}
       </span>
 
-      <strong style={{ fontSize: "22px" }}>
+      <strong
+        style={{
+          fontSize: "22px",
+        }}
+      >
         R{value.toFixed(2)}
       </strong>
     </div>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+/*
+ * ============================================================
+ * STYLES
+ * ============================================================
+ */
+
+const styles: Record<
+  string,
+  React.CSSProperties
+> = {
   page: {
     minHeight: "100vh",
     background: "#f1f5f9",
     padding: "28px 20px 60px",
-    fontFamily: "Arial, sans-serif",
+    fontFamily:
+      "Arial, sans-serif",
   },
 
   container: {
@@ -503,6 +731,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "10px",
     borderRadius: "16px",
     background: "white",
+    boxShadow:
+      "0 8px 24px rgba(15,23,42,.05)",
   },
 
   navLink: {
@@ -523,7 +753,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   hero: {
-    background: "linear-gradient(135deg,#0f172a,#0f766e)",
+    background:
+      "linear-gradient(135deg,#0f172a,#0f766e)",
     color: "white",
     padding: "34px",
     borderRadius: "28px",
@@ -551,12 +782,14 @@ const styles: Record<string, React.CSSProperties> = {
     background: "white",
     padding: "26px",
     borderRadius: "20px",
-    boxShadow: "0 8px 24px rgba(15,23,42,.06)",
+    boxShadow:
+      "0 8px 24px rgba(15,23,42,.06)",
   },
 
   topRow: {
     display: "flex",
-    justifyContent: "space-between",
+    justifyContent:
+      "space-between",
     gap: "15px",
     alignItems: "flex-start",
     flexWrap: "wrap",
@@ -574,7 +807,8 @@ const styles: Record<string, React.CSSProperties> = {
 
   moneyGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
+    gridTemplateColumns:
+      "repeat(auto-fit,minmax(180px,1fr))",
     gap: "12px",
     marginTop: "20px",
   },
@@ -623,8 +857,10 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     background: "#39ff14",
     color: "#052e16",
-    border: "2px solid #22c55e",
-    boxShadow: "0 0 22px rgba(57,255,20,.40)",
+    border:
+      "2px solid #22c55e",
+    boxShadow:
+      "0 0 22px rgba(57,255,20,.40)",
     padding: "17px 20px",
     borderRadius: "12px",
     fontWeight: 900,
