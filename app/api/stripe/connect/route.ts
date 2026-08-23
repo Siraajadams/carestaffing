@@ -62,7 +62,9 @@ function getAdminSupabase() {
  * ============================================================
  */
 
-async function getAuthenticatedUser(req: NextRequest) {
+async function getAuthenticatedUser(
+  req: NextRequest
+) {
   const authHeader =
     req.headers.get("authorization");
 
@@ -134,7 +136,9 @@ async function getAuthenticatedUser(req: NextRequest) {
  * ============================================================
  */
 
-function getBaseUrl(req: NextRequest) {
+function getBaseUrl(
+  req: NextRequest
+) {
   const configured =
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.APP_URL ||
@@ -164,11 +168,17 @@ function getBaseUrl(req: NextRequest) {
  * ============================================================
  * COUNTRY
  * ============================================================
+ *
+ * Do NOT use:
+ *
+ * Stripe.AccountCreateParams.Country
+ *
+ * Some Stripe SDK versions do not export that type.
  */
 
 function stripeCountry(
   country?: string | null
-): Stripe.AccountCreateParams.Country {
+): "ZA" | "GB" | "NZ" | "IE" {
   switch (
     (country || "")
       .trim()
@@ -198,7 +208,7 @@ function stripeCountry(
 
 /*
  * ============================================================
- * CHECK STRIPE ACCOUNT STATUS
+ * STRIPE ACCOUNT STATUS
  * ============================================================
  */
 
@@ -260,7 +270,7 @@ export async function POST(
   try {
     /*
      * --------------------------------------------------------
-     * ENV CHECKS
+     * ENV CHECK
      * --------------------------------------------------------
      */
 
@@ -307,6 +317,7 @@ export async function POST(
         {
           error:
             "Unauthorised.",
+
           detail:
             auth.error,
         },
@@ -359,11 +370,8 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * ACCOUNT TYPE CHECK
+     * ROLE CHECK
      * --------------------------------------------------------
-     *
-     * Allow the healthcare professional / worker
-     * who is receiving the payout to connect Stripe.
      */
 
     const role =
@@ -422,9 +430,6 @@ export async function POST(
     const baseUrl =
       getBaseUrl(req);
 
-    /*
-     * Use the CareStaffing profile by default.
-     */
     const refreshUrl =
       typeof body.refreshUrl ===
         "string" &&
@@ -441,7 +446,7 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * EXISTING STRIPE ACCOUNT
+     * EXISTING STRIPE ACCOUNT ID
      * --------------------------------------------------------
      */
 
@@ -624,12 +629,10 @@ export async function POST(
       }
 
       /*
-       * If already payout-ready, no need
-       * to send the user through onboarding again.
+       * If already ready for payouts,
+       * do not create another onboarding link.
        */
-      if (
-        status.fullyReady
-      ) {
+      if (status.fullyReady) {
         return NextResponse.json(
           {
             success: true,
@@ -649,17 +652,16 @@ export async function POST(
             chargesEnabled:
               status.chargesEnabled,
 
-            requirements:
-              {
-                currentlyDue:
-                  status.currentlyDue,
+            requirements: {
+              currentlyDue:
+                status.currentlyDue,
 
-                eventuallyDue:
-                  status.eventuallyDue,
+              eventuallyDue:
+                status.eventuallyDue,
 
-                pastDue:
-                  status.pastDue,
-              },
+              pastDue:
+                status.pastDue,
+            },
 
             message:
               "Stripe payouts are already connected and ready.",
@@ -670,7 +672,7 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * CREATE STRIPE ONBOARDING LINK
+     * CREATE ONBOARDING LINK
      * --------------------------------------------------------
      */
 
@@ -693,7 +695,7 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * RETURN LINK
+     * STATUS
      * --------------------------------------------------------
      */
 
@@ -701,6 +703,12 @@ export async function POST(
       getStripeAccountStatus(
         account
       );
+
+    /*
+     * --------------------------------------------------------
+     * RETURN
+     * --------------------------------------------------------
+     */
 
     return NextResponse.json(
       {
