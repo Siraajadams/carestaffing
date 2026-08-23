@@ -72,7 +72,7 @@ function toCents(value: number) {
   return Math.round(value * 100);
 }
 
-function calculateLocumAmount(timesheet: any, shift: any) {
+function calculateInvoiceTotal(timesheet: any, shift: any) {
   const storedTotal = Number(timesheet.total_amount || 0);
 
   if (storedTotal > 0) {
@@ -236,21 +236,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const locumAmount = Number(
-      calculateLocumAmount(timesheet, shift).toFixed(2)
+    const invoiceTotal = Number(
+      calculateInvoiceTotal(timesheet, shift).toFixed(2)
     );
 
-    if (!Number.isFinite(locumAmount) || locumAmount <= 0) {
+    if (!Number.isFinite(invoiceTotal) || invoiceTotal <= 0) {
       return NextResponse.json(
         { error: "The approved timesheet has no payable amount." },
         { status: 400 }
       );
     }
 
-    const platformFee = Number((locumAmount * 0.1).toFixed(2));
-    const employerTotal = Number(
-      (locumAmount + platformFee).toFixed(2)
-    );
+    /*
+     * CareStaffing split:
+     * Employer pays 100% of the approved invoice total.
+     * CareStaffing keeps 10% as the application fee.
+     * The locum receives the remaining 90%.
+     *
+     * Work in cents so the Stripe charge and split always add up exactly.
+     */
+    const employerTotalCents = toCents(invoiceTotal);
+    const platformFeeCents = Math.round(employerTotalCents * 0.1);
+    const locumAmountCents = employerTotalCents - platformFeeCents;
+
+    const employerTotal = employerTotalCents / 100;
+    const platformFee = platformFeeCents / 100;
+    const locumAmount = locumAmountCents / 100;
 
     const currency = String(shift.currency || "ZAR").toLowerCase();
 
@@ -299,7 +310,7 @@ export async function POST(req: NextRequest) {
           quantity: 1,
           price_data: {
             currency,
-            unit_amount: toCents(employerTotal),
+            unit_amount: employerTotalCents,
             product_data: {
               name:
                 shift.title ||
@@ -313,7 +324,7 @@ export async function POST(req: NextRequest) {
       ],
 
       payment_intent_data: {
-        application_fee_amount: toCents(platformFee),
+        application_fee_amount: platformFeeCents,
         transfer_data: {
           destination: locumProfile.stripe_account_id,
         },
@@ -344,7 +355,7 @@ export async function POST(req: NextRequest) {
       employer_id: user.id,
       locum_id: timesheet.locum_id,
 
-      gross_amount: locumAmount,
+      gross_amount: employerTotal,
       locum_amount: locumAmount,
       platform_fee: platformFee,
       employer_total: employerTotal,
