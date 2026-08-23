@@ -20,12 +20,25 @@ export default function EmployerPaymentsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const timesheetId = searchParams.get("timesheet") || "";
+  const timesheetId =
+    searchParams.get("timesheet") ||
+    searchParams.get("timesheet_id") ||
+    "";
 
-  const [timesheet, setTimesheet] = useState<Timesheet | null>(null);
-  const [loading, setLoading] = useState(Boolean(timesheetId));
-  const [paying, setPaying] = useState(false);
-  const [error, setError] = useState("");
+  const [timesheet, setTimesheet] =
+    useState<Timesheet | null>(null);
+
+  const [loading, setLoading] =
+    useState(Boolean(timesheetId));
+
+  const [paying, setPaying] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
+  const [message, setMessage] =
+    useState("");
 
   useEffect(() => {
     if (timesheetId) {
@@ -38,6 +51,7 @@ export default function EmployerPaymentsClient() {
   async function loadTimesheet(id: string) {
     setLoading(true);
     setError("");
+    setMessage("");
 
     try {
       const {
@@ -50,36 +64,40 @@ export default function EmployerPaymentsClient() {
         return;
       }
 
-      const { data, error: loadError } = await supabase
-        .from("timesheets")
-        .select(
+      const { data, error: loadError } =
+        await supabase
+          .from("timesheets")
+          .select(
+            `
+            id,
+            shift_id,
+            locum_id,
+            work_date,
+            hours_worked,
+            agreed_rate,
+            total_amount,
+            status
           `
-          id,
-          shift_id,
-          locum_id,
-          work_date,
-          hours_worked,
-          agreed_rate,
-          total_amount,
-          status
-        `
-        )
-        .eq("id", id)
-        .maybeSingle();
+          )
+          .eq("id", id)
+          .maybeSingle();
 
       if (loadError) {
         throw loadError;
       }
 
       if (!data) {
-        setError("Invoice could not be found.");
         setTimesheet(null);
+        setError("Invoice could not be found.");
         return;
       }
 
       setTimesheet(data as Timesheet);
     } catch (err: any) {
-      console.error("Load employer payment error:", err);
+      console.error(
+        "Load employer payment error:",
+        err
+      );
 
       setError(
         err?.message ||
@@ -91,14 +109,18 @@ export default function EmployerPaymentsClient() {
   }
 
   function invoiceAmount(row: Timesheet) {
-    const storedAmount = Number(row.total_amount || 0);
+    const storedAmount =
+      Number(row.total_amount || 0);
 
     if (storedAmount > 0) {
       return storedAmount;
     }
 
-    const hours = Number(row.hours_worked || 0);
-    const rate = Number(row.agreed_rate || 0);
+    const hours =
+      Number(row.hours_worked || 0);
+
+    const rate =
+      Number(row.agreed_rate || 0);
 
     return hours * rate;
   }
@@ -109,7 +131,10 @@ export default function EmployerPaymentsClient() {
       return;
     }
 
-    if (timesheet.status?.toLowerCase() !== "approved") {
+    if (
+      timesheet.status?.toLowerCase() !==
+      "approved"
+    ) {
       setError(
         "Only an approved timesheet can be paid."
       );
@@ -118,27 +143,129 @@ export default function EmployerPaymentsClient() {
 
     setPaying(true);
     setError("");
+    setMessage("");
 
     try {
+      /*
+       * Get the current Supabase session.
+       * We need the access token because the Stripe
+       * server route authenticates the employer.
+       */
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        console.error(
+          "Supabase session error:",
+          sessionError
+        );
+
+        throw new Error(
+          "Could not verify your login session. Please log in again."
+        );
+      }
+
+      if (!session?.access_token) {
+        await supabase.auth.signOut();
+        router.replace("/login");
+        return;
+      }
+
+      console.log(
+        "Creating Stripe checkout:",
+        timesheet.id
+      );
+
       const response = await fetch(
         "/api/stripe/create-checkout",
         {
           method: "POST",
+
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type":
+              "application/json",
+
+            Authorization:
+              `Bearer ${session.access_token}`,
           },
+
           body: JSON.stringify({
-            timesheetId: timesheet.id,
-            timesheet_id: timesheet.id,
+            timesheetId:
+              timesheet.id,
           }),
         }
       );
 
-      const payload = await response
-        .json()
-        .catch(() => ({}));
+      const payload =
+        await response
+          .json()
+          .catch(() => ({}));
+
+      console.log(
+        "Stripe checkout response:",
+        response.status,
+        payload
+      );
 
       if (!response.ok) {
+        /*
+         * Authentication problem
+         */
+        if (response.status === 401) {
+          await supabase.auth.signOut();
+
+          router.replace("/login");
+
+          return;
+        }
+
+        /*
+         * Employer does not own this shift
+         */
+        if (response.status === 403) {
+          throw new Error(
+            payload?.error ||
+              "You are not authorised to pay this invoice."
+          );
+        }
+
+        /*
+         * Locum has not connected Stripe
+         */
+        if (
+          payload?.code ===
+          "LOCUM_STRIPE_NOT_CONNECTED"
+        ) {
+          throw new Error(
+            "The locum has not completed Stripe payout onboarding yet. " +
+              "The locum must connect their Stripe account before payment can be processed."
+          );
+        }
+
+        /*
+         * Stripe Connect exists but payout is not ready
+         */
+        if (
+          payload?.code ===
+          "LOCUM_PAYOUTS_NOT_ENABLED"
+        ) {
+          throw new Error(
+            "The locum's Stripe account is connected but is not yet enabled to receive payouts."
+          );
+        }
+
+        /*
+         * Invoice already paid
+         */
+        if (response.status === 409) {
+          throw new Error(
+            payload?.error ||
+              "This invoice has already been paid."
+          );
+        }
+
         throw new Error(
           payload?.error ||
             payload?.message ||
@@ -153,14 +280,27 @@ export default function EmployerPaymentsClient() {
         payload?.sessionUrl;
 
       if (!checkoutUrl) {
+        console.error(
+          "Stripe returned no checkout URL:",
+          payload
+        );
+
         throw new Error(
-          "Stripe returned no checkout URL."
+          "Stripe created the payment but returned no checkout URL."
         );
       }
 
-      window.location.href = checkoutUrl;
+      setMessage(
+        "Payment session created. Opening Stripe..."
+      );
+
+      window.location.href =
+        checkoutUrl;
     } catch (err: any) {
-      console.error("Employer Stripe payment error:", err);
+      console.error(
+        "Employer Stripe payment error:",
+        err
+      );
 
       setError(
         err?.message ||
@@ -171,12 +311,16 @@ export default function EmployerPaymentsClient() {
     }
   }
 
-  const amount = timesheet
-    ? invoiceAmount(timesheet)
-    : 0;
+  const amount =
+    timesheet
+      ? invoiceAmount(timesheet)
+      : 0;
 
-  const careStaffingFee = amount * 0.1;
-  const locumPayout = amount - careStaffingFee;
+  const careStaffingFee =
+    amount * 0.1;
+
+  const locumPayout =
+    amount - careStaffingFee;
 
   return (
     <main style={styles.page}>
@@ -249,10 +393,17 @@ export default function EmployerPaymentsClient() {
           </h1>
 
           <p style={styles.subtitle}>
-            Pay approved CareStaffing invoices securely
-            through Stripe.
+            Pay approved CareStaffing
+            invoices securely through
+            Stripe.
           </p>
         </section>
+
+        {message && (
+          <div style={styles.success}>
+            {message}
+          </div>
+        )}
 
         {error && (
           <div style={styles.error}>
@@ -262,13 +413,18 @@ export default function EmployerPaymentsClient() {
 
         {!timesheetId ? (
           <section style={styles.card}>
-            <h2 style={{ marginTop: 0 }}>
+            <h2
+              style={{
+                marginTop: 0,
+              }}
+            >
               Choose an approved invoice
             </h2>
 
             <p style={styles.muted}>
-              Open the Invoices page and select the
-              approved invoice you want to pay.
+              Open the Invoices page and
+              select the approved invoice
+              you want to pay.
             </p>
 
             <Link
@@ -290,13 +446,18 @@ export default function EmployerPaymentsClient() {
           <section style={styles.card}>
             <div style={styles.topRow}>
               <div>
-                <p style={styles.smallLabel}>
+                <p
+                  style={
+                    styles.smallLabel
+                  }
+                >
                   PAYMENT STATUS
                 </p>
 
                 <h2
                   style={{
-                    margin: "5px 0 0",
+                    margin:
+                      "5px 0 0",
                   }}
                 >
                   Invoice Payment
@@ -305,7 +466,8 @@ export default function EmployerPaymentsClient() {
 
               <span style={styles.badge}>
                 {(
-                  timesheet.status || "unknown"
+                  timesheet.status ||
+                  "unknown"
                 ).toUpperCase()}
               </span>
             </div>
@@ -319,7 +481,9 @@ export default function EmployerPaymentsClient() {
 
               <MoneyBox
                 label="CareStaffing Fee (10%)"
-                value={careStaffingFee}
+                value={
+                  careStaffingFee
+                }
               />
 
               <MoneyBox
@@ -328,7 +492,11 @@ export default function EmployerPaymentsClient() {
               />
             </div>
 
-            <div style={styles.paymentExplanation}>
+            <div
+              style={
+                styles.paymentExplanation
+              }
+            >
               <strong>
                 How the payment works
               </strong>
@@ -341,15 +509,25 @@ export default function EmployerPaymentsClient() {
               >
                 The employer pays{" "}
                 <strong>
-                  R{amount.toFixed(2)}
+                  R
+                  {amount.toFixed(
+                    2
+                  )}
                 </strong>{" "}
-                once. CareStaffing retains{" "}
+                once. CareStaffing
+                retains{" "}
                 <strong>
-                  R{careStaffingFee.toFixed(2)}
+                  R
+                  {careStaffingFee.toFixed(
+                    2
+                  )}
                 </strong>{" "}
                 and the locum receives{" "}
                 <strong>
-                  R{locumPayout.toFixed(2)}
+                  R
+                  {locumPayout.toFixed(
+                    2
+                  )}
                 </strong>
                 .
               </p>
@@ -357,10 +535,16 @@ export default function EmployerPaymentsClient() {
 
             {timesheet.status?.toLowerCase() !==
             "approved" ? (
-              <div style={styles.warning}>
-                This timesheet is not approved yet.
-                Payment remains locked until employer
-                approval is complete.
+              <div
+                style={
+                  styles.warning
+                }
+              >
+                This timesheet is not
+                approved yet. Payment
+                remains locked until
+                employer approval is
+                complete.
               </div>
             ) : (
               <button
@@ -371,7 +555,16 @@ export default function EmployerPaymentsClient() {
                 disabled={paying}
                 style={{
                   ...styles.payButton,
-                  opacity: paying ? 0.6 : 1,
+
+                  opacity:
+                    paying
+                      ? 0.6
+                      : 1,
+
+                  cursor:
+                    paying
+                      ? "not-allowed"
+                      : "pointer",
                 }}
               >
                 {paying
@@ -401,12 +594,17 @@ function MoneyBox({
     <div
       style={{
         ...styles.moneyBox,
+
         ...(highlight
           ? styles.moneyHighlight
           : {}),
       }}
     >
-      <span style={styles.smallLabel}>
+      <span
+        style={
+          styles.smallLabel
+        }
+      >
         {label}
       </span>
 
@@ -429,7 +627,8 @@ const styles: Record<
     minHeight: "100vh",
     background: "#f1f5f9",
     padding: "28px 20px 60px",
-    fontFamily: "Arial, sans-serif",
+    fontFamily:
+      "Arial, sans-serif",
   },
 
   container: {
@@ -451,6 +650,8 @@ const styles: Record<
     padding: "10px",
     borderRadius: "16px",
     background: "white",
+    boxShadow:
+      "0 8px 24px rgba(15,23,42,.05)",
   },
 
   navLink: {
@@ -506,7 +707,8 @@ const styles: Record<
 
   topRow: {
     display: "flex",
-    justifyContent: "space-between",
+    justifyContent:
+      "space-between",
     gap: "15px",
     alignItems: "flex-start",
     flexWrap: "wrap",
@@ -574,13 +776,13 @@ const styles: Record<
     width: "100%",
     background: "#39ff14",
     color: "#052e16",
-    border: "2px solid #22c55e",
+    border:
+      "2px solid #22c55e",
     boxShadow:
       "0 0 22px rgba(57,255,20,.40)",
     padding: "17px 20px",
     borderRadius: "12px",
     fontWeight: 900,
-    cursor: "pointer",
     fontSize: "16px",
   },
 
@@ -590,6 +792,15 @@ const styles: Record<
     borderRadius: "12px",
     background: "#fef3c7",
     color: "#92400e",
+    fontWeight: 800,
+  },
+
+  success: {
+    background: "#dcfce7",
+    color: "#166534",
+    padding: "14px",
+    borderRadius: "12px",
+    marginBottom: "18px",
     fontWeight: 800,
   },
 
