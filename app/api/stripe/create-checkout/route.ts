@@ -173,7 +173,9 @@ function getBaseUrl(
  * ============================================================
  */
 
-function toCents(value: number) {
+function toCents(
+  value: number
+) {
   return Math.round(
     value * 100
   );
@@ -181,7 +183,7 @@ function toCents(value: number) {
 
 /*
  * ============================================================
- * INVOICE TOTAL
+ * CALCULATE APPROVED INVOICE
  * ============================================================
  */
 
@@ -189,9 +191,6 @@ function calculateInvoiceTotal(
   timesheet: any,
   shift: any
 ) {
-  /*
-   * Prefer stored approved total.
-   */
   const storedTotal =
     Number(
       timesheet.total_amount ||
@@ -202,10 +201,6 @@ function calculateInvoiceTotal(
     return storedTotal;
   }
 
-  /*
-   * Otherwise:
-   * approved hours × agreed rate.
-   */
   const agreedRate =
     Number(
       timesheet.agreed_rate ||
@@ -228,9 +223,6 @@ function calculateInvoiceTotal(
     );
   }
 
-  /*
-   * Fallback to shift rate.
-   */
   const rate =
     Number(
       shift.locum_rate ||
@@ -268,9 +260,7 @@ export async function POST(
 ) {
   try {
     /*
-     * --------------------------------------------------------
      * ENV CHECK
-     * --------------------------------------------------------
      */
 
     if (!stripeSecretKey) {
@@ -301,9 +291,7 @@ export async function POST(
     }
 
     /*
-     * --------------------------------------------------------
-     * AUTHENTICATE EMPLOYER
-     * --------------------------------------------------------
+     * AUTH
      */
 
     const auth =
@@ -316,6 +304,7 @@ export async function POST(
         {
           error:
             "Unauthorised.",
+
           detail:
             auth.error,
         },
@@ -329,9 +318,7 @@ export async function POST(
       auth.user;
 
     /*
-     * --------------------------------------------------------
-     * REQUEST BODY
-     * --------------------------------------------------------
+     * BODY
      */
 
     const body =
@@ -362,9 +349,7 @@ export async function POST(
       getAdminSupabase();
 
     /*
-     * --------------------------------------------------------
      * LOAD TIMESHEET
-     * --------------------------------------------------------
      */
 
     const {
@@ -397,9 +382,7 @@ export async function POST(
     }
 
     /*
-     * --------------------------------------------------------
      * APPROVED ONLY
-     * --------------------------------------------------------
      */
 
     if (
@@ -445,9 +428,7 @@ export async function POST(
     }
 
     /*
-     * --------------------------------------------------------
      * LOAD SHIFT
-     * --------------------------------------------------------
      */
 
     const {
@@ -480,9 +461,7 @@ export async function POST(
     }
 
     /*
-     * --------------------------------------------------------
      * EMPLOYER AUTHORISATION
-     * --------------------------------------------------------
      */
 
     let employerAuthorised =
@@ -534,20 +513,9 @@ export async function POST(
      * SINGLE PAYMENT MODEL
      * ========================================================
      *
-     * NO Stripe Connect.
-     * NO recipient Stripe account.
-     * NO payout onboarding.
-     * NO transfer_data.
-     * NO application_fee_amount.
-     *
-     * Employer pays 100% into
-     * CareStaffing Stripe account.
-     */
-
-    /*
-     * --------------------------------------------------------
-     * CALCULATE AMOUNT
-     * --------------------------------------------------------
+     * Employer pays full amount to CareStaffing.
+     * No Stripe Connect.
+     * No payout recipient setup.
      */
 
     const invoiceTotal =
@@ -576,14 +544,7 @@ export async function POST(
     }
 
     /*
-     * --------------------------------------------------------
      * INTERNAL ACCOUNTING
-     * --------------------------------------------------------
-     *
-     * Stripe receives full payment.
-     *
-     * 10 / 90 split is now only
-     * recorded internally.
      */
 
     const employerTotalCents =
@@ -620,9 +581,7 @@ export async function POST(
       ).toLowerCase();
 
     /*
-     * --------------------------------------------------------
      * EXISTING PAYMENT
-     * --------------------------------------------------------
      */
 
     const {
@@ -662,6 +621,7 @@ export async function POST(
         {
           error:
             "This invoice has already been paid.",
+
           paymentId:
             existingPayment.id,
         },
@@ -672,9 +632,7 @@ export async function POST(
     }
 
     /*
-     * --------------------------------------------------------
-     * CHECKOUT URLS
-     * --------------------------------------------------------
+     * URLS
      */
 
     const baseUrl =
@@ -693,84 +651,60 @@ export async function POST(
       `&payment=cancelled`;
 
     /*
-     * --------------------------------------------------------
-     * STANDARD STRIPE CHECKOUT
-     * --------------------------------------------------------
+     * ========================================================
+     * NORMAL STRIPE CHECKOUT
+     * ========================================================
      */
 
     const session =
-      await stripe
-        .checkout
-        .sessions
-        .create({
-          mode:
-            "payment",
+      await stripe.checkout.sessions.create({
+        mode: "payment",
 
-          success_url:
-            successUrl,
+        success_url:
+          successUrl,
 
-          cancel_url:
-            cancelUrl,
+        cancel_url:
+          cancelUrl,
 
-          customer_email:
-            user.email ||
-            undefined,
+        customer_email:
+          user.email ||
+          undefined,
 
-          line_items: [
-            {
-              quantity: 1,
+        line_items: [
+          {
+            quantity: 1,
 
-              price_data: {
-                currency,
+            price_data: {
+              currency,
 
-                unit_amount:
-                  employerTotalCents,
+              unit_amount:
+                employerTotalCents,
 
-                product_data: {
-                  name:
-                    shift.title ||
-                    "CareStaffing healthcare shift",
+              product_data: {
+                name:
+                  shift.title ||
+                  "CareStaffing healthcare shift",
 
-                  description:
-                    `Approved CareStaffing timesheet • ` +
-                    `${Number(
-                      timesheet.hours_worked ||
-                        0
-                    ).toFixed(
-                      2
-                    )} hours`,
-                },
+                description:
+                  `Approved CareStaffing timesheet • ` +
+                  `${Number(
+                    timesheet.hours_worked ||
+                      0
+                  ).toFixed(
+                    2
+                  )} hours`,
               },
             },
-          ],
+          },
+        ],
 
-          /*
-           * Standard PaymentIntent.
-           * Metadata only.
-           */
-          payment_intent_data:
-            {
-              metadata: {
-                carestaffing:
-                  "true",
-
-                payment_model:
-                  "single_platform_payment",
-
-                timesheet_id:
-                  timesheet.id,
-
-                shift_id:
-                  timesheet.shift_id,
-
-                professional_id:
-                  timesheet.locum_id,
-
-                employer_id:
-                  user.id,
-              },
-            },
-
+        /*
+         * IMPORTANT:
+         *
+         * No transfer_data.
+         * No application_fee_amount.
+         */
+        payment_intent_data: {
           metadata: {
             carestaffing:
               "true",
@@ -789,28 +723,47 @@ export async function POST(
 
             employer_id:
               user.id,
-
-            employer_total:
-              employerTotal.toFixed(
-                2
-              ),
-
-            platform_fee:
-              platformFee.toFixed(
-                2
-              ),
-
-            professional_amount:
-              professionalAmount.toFixed(
-                2
-              ),
           },
-        });
+        },
+
+        metadata: {
+          carestaffing:
+            "true",
+
+          payment_model:
+            "single_platform_payment",
+
+          timesheet_id:
+            timesheet.id,
+
+          shift_id:
+            timesheet.shift_id,
+
+          professional_id:
+            timesheet.locum_id,
+
+          employer_id:
+            user.id,
+
+          employer_total:
+            employerTotal.toFixed(
+              2
+            ),
+
+          platform_fee:
+            platformFee.toFixed(
+              2
+            ),
+
+          professional_amount:
+            professionalAmount.toFixed(
+              2
+            ),
+        },
+      });
 
     /*
-     * --------------------------------------------------------
-     * SAVE PAYMENT RECORD
-     * --------------------------------------------------------
+     * SAVE PENDING PAYMENT
      */
 
     const paymentPayload =
@@ -824,10 +777,6 @@ export async function POST(
         employer_id:
           user.id,
 
-        /*
-         * Keep this column name because
-         * your current database uses it.
-         */
         locum_id:
           timesheet.locum_id,
 
@@ -843,16 +792,9 @@ export async function POST(
         locum_amount:
           professionalAmount,
 
-        /*
-         * Stripe payment not completed yet.
-         */
         payment_status:
           "pending",
 
-        /*
-         * Professional settlement
-         * happens separately.
-         */
         payout_status:
           "pending",
 
@@ -874,9 +816,7 @@ export async function POST(
       | null = null;
 
     /*
-     * --------------------------------------------------------
-     * UPDATE EXISTING ATTEMPT
-     * --------------------------------------------------------
+     * UPDATE OR INSERT PAYMENT
      */
 
     if (existingPayment) {
@@ -907,12 +847,6 @@ export async function POST(
       paymentId =
         updatedPayment.id;
     } else {
-      /*
-       * ------------------------------------------------------
-       * INSERT NEW PAYMENT
-       * ------------------------------------------------------
-       */
-
       const {
         data:
           insertedPayment,
@@ -938,9 +872,7 @@ export async function POST(
     }
 
     /*
-     * --------------------------------------------------------
-     * RETURN CHECKOUT URL
-     * --------------------------------------------------------
+     * SUCCESS
      */
 
     return NextResponse.json(
@@ -960,8 +892,11 @@ export async function POST(
 
         amounts: {
           employerTotal,
+
           platformFee,
+
           professionalAmount,
+
           currency:
             currency.toUpperCase(),
         },
