@@ -12,10 +12,13 @@ export const dynamic = "force-dynamic";
  */
 
 const stripeSecretKey =
-  (process.env.STRIPE_SECRET_KEY || "").trim();
+  (process.env.STRIPE_SECRET_KEY || "")
+    .trim()
+    .replace(/[\r\n]/g, "");
 
 const supabaseUrl =
-  (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+  (process.env.NEXT_PUBLIC_SUPABASE_URL || "")
+    .trim();
 
 const supabaseServiceRoleKey =
   (process.env.SUPABASE_SERVICE_ROLE_KEY || "")
@@ -26,7 +29,7 @@ const stripe = new Stripe(stripeSecretKey);
 
 /*
  * ============================================================
- * SUPABASE ADMIN CLIENT
+ * SUPABASE ADMIN
  * ============================================================
  */
 
@@ -58,17 +61,17 @@ function getAdminSupabase() {
 
 /*
  * ============================================================
- * AUTH
+ * AUTHENTICATE EMPLOYER
  * ============================================================
  */
 
 async function getAuthenticatedUser(
   req: NextRequest
 ) {
-  const authHeader =
+  const authorization =
     req.headers.get("authorization");
 
-  if (!authHeader) {
+  if (!authorization) {
     return {
       user: null,
       error:
@@ -77,25 +80,25 @@ async function getAuthenticatedUser(
   }
 
   if (
-    !authHeader.startsWith("Bearer ")
+    !authorization.startsWith("Bearer ")
   ) {
     return {
       user: null,
       error:
-        "Authorization header is not a Bearer token.",
+        "Authorization header is invalid.",
     };
   }
 
-  const token =
-    authHeader
+  const accessToken =
+    authorization
       .slice("Bearer ".length)
       .trim();
 
-  if (!token) {
+  if (!accessToken) {
     return {
       user: null,
       error:
-        "Authentication token is empty.",
+        "Authentication token was empty.",
     };
   }
 
@@ -107,12 +110,12 @@ async function getAuthenticatedUser(
     error,
   } =
     await supabase.auth.getUser(
-      token
+      accessToken
     );
 
   if (error || !user) {
     console.error(
-      "Stripe Connect Supabase authentication failed:",
+      "Employer authentication failed:",
       error
     );
 
@@ -120,7 +123,7 @@ async function getAuthenticatedUser(
       user: null,
       error:
         error?.message ||
-        "Supabase rejected the authentication token.",
+        "Supabase rejected the login token.",
     };
   }
 
@@ -166,96 +169,95 @@ function getBaseUrl(
 
 /*
  * ============================================================
- * COUNTRY
+ * MONEY
  * ============================================================
- *
- * Do NOT use:
- *
- * Stripe.AccountCreateParams.Country
- *
- * Some Stripe SDK versions do not export that type.
  */
 
-function stripeCountry(
-  country?: string | null
-): "ZA" | "GB" | "NZ" | "IE" {
-  switch (
-    (country || "")
-      .trim()
-      .toLowerCase()
-  ) {
-    case "south africa":
-    case "za":
-      return "ZA";
-
-    case "united kingdom":
-    case "uk":
-    case "gb":
-      return "GB";
-
-    case "new zealand":
-    case "nz":
-      return "NZ";
-
-    case "ireland":
-    case "ie":
-      return "IE";
-
-    default:
-      return "ZA";
-  }
+function toCents(
+  value: number
+) {
+  return Math.round(
+    value * 100
+  );
 }
 
 /*
  * ============================================================
- * STRIPE ACCOUNT STATUS
+ * CALCULATE APPROVED INVOICE
  * ============================================================
  */
 
-function getStripeAccountStatus(
-  account: Stripe.Account
+function calculateInvoiceTotal(
+  timesheet: any,
+  shift: any
 ) {
-  const currentlyDue =
-    account.requirements
-      ?.currently_due || [];
-
-  const eventuallyDue =
-    account.requirements
-      ?.eventually_due || [];
-
-  const pastDue =
-    account.requirements
-      ?.past_due || [];
-
-  const requirementsComplete =
-    Boolean(
-      account.details_submitted &&
-        currentlyDue.length === 0
+  /*
+   * Prefer the final stored
+   * approved timesheet amount.
+   */
+  const storedTotal =
+    Number(
+      timesheet.total_amount ||
+        0
     );
 
-  const payoutsEnabled =
-    Boolean(
-      account.payouts_enabled
+  if (storedTotal > 0) {
+    return storedTotal;
+  }
+
+  /*
+   * Otherwise:
+   * approved hours × agreed rate.
+   */
+  const agreedRate =
+    Number(
+      timesheet.agreed_rate ||
+        0
     );
 
-  const chargesEnabled =
-    Boolean(
-      account.charges_enabled
+  const hoursWorked =
+    Number(
+      timesheet.hours_worked ||
+        0
     );
 
-  const fullyReady =
-    requirementsComplete &&
-    payoutsEnabled;
+  if (
+    agreedRate > 0 &&
+    hoursWorked > 0
+  ) {
+    return (
+      agreedRate *
+      hoursWorked
+    );
+  }
 
-  return {
-    requirementsComplete,
-    payoutsEnabled,
-    chargesEnabled,
-    fullyReady,
-    currentlyDue,
-    eventuallyDue,
-    pastDue,
-  };
+  /*
+   * Fallback to shift rate.
+   */
+  const rate =
+    Number(
+      shift.locum_rate ||
+        shift.hourly_rate ||
+        0
+    );
+
+  const rateType =
+    String(
+      shift.rate_type ||
+        "hourly"
+    ).toLowerCase();
+
+  if (
+    rateType === "hourly" &&
+    hoursWorked > 0
+  ) {
+    return (
+      rate *
+      hoursWorked
+    );
+  }
+
+  return rate;
 }
 
 /*
@@ -270,7 +272,7 @@ export async function POST(
   try {
     /*
      * --------------------------------------------------------
-     * ENV CHECK
+     * ENVIRONMENT CHECK
      * --------------------------------------------------------
      */
 
@@ -303,7 +305,7 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * AUTHENTICATE USER
+     * AUTHENTICATE EMPLOYER
      * --------------------------------------------------------
      */
 
@@ -330,37 +332,67 @@ export async function POST(
     const user =
       auth.user;
 
+    /*
+     * --------------------------------------------------------
+     * REQUEST
+     * --------------------------------------------------------
+     */
+
+    const body =
+      await req
+        .json()
+        .catch(() => ({}));
+
+    const timesheetId =
+      String(
+        body?.timesheetId ||
+          body?.timesheet_id ||
+          ""
+      ).trim();
+
+    if (!timesheetId) {
+      return NextResponse.json(
+        {
+          error:
+            "timesheetId is required.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
     const supabase =
       getAdminSupabase();
 
     /*
      * --------------------------------------------------------
-     * LOAD PROFILE
+     * LOAD TIMESHEET
      * --------------------------------------------------------
      */
 
     const {
-      data: profile,
-      error: profileError,
+      data: timesheet,
+      error: timesheetError,
     } =
       await supabase
-        .from("profiles")
+        .from("timesheets")
         .select("*")
         .eq(
           "id",
-          user.id
+          timesheetId
         )
         .maybeSingle();
 
-    if (profileError) {
-      throw profileError;
+    if (timesheetError) {
+      throw timesheetError;
     }
 
-    if (!profile) {
+    if (!timesheet) {
       return NextResponse.json(
         {
           error:
-            "Healthcare professional profile not found.",
+            "Timesheet not found.",
         },
         {
           status: 404,
@@ -370,45 +402,142 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * ROLE CHECK
+     * APPROVED ONLY
      * --------------------------------------------------------
      */
 
-    const role =
-      String(
-        profile.role ||
-          profile.account_type ||
-          profile.user_type ||
-          ""
-      )
-        .trim()
-        .toLowerCase();
-
-    const payoutRecipientRoles =
-      [
-        "locum",
-        "healthcare professional",
-        "healthcare_professional",
-        "professional",
-        "worker",
-        "provider",
-        "doctor",
-        "pharmacist",
-        "nurse",
-        "physiotherapist",
-        "biokinetist",
-      ];
-
     if (
-      role &&
-      !payoutRecipientRoles.includes(
-        role
-      )
+      String(
+        timesheet.status ||
+          ""
+      ).toLowerCase() !==
+      "approved"
     ) {
       return NextResponse.json(
         {
           error:
-            "This account type is not configured to receive CareStaffing payouts.",
+            "Only an approved timesheet can be paid.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    if (!timesheet.shift_id) {
+      return NextResponse.json(
+        {
+          error:
+            "Timesheet has no shift linked to it.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    if (!timesheet.locum_id) {
+      return NextResponse.json(
+        {
+          error:
+            "Timesheet has no healthcare professional linked to it.",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    /*
+     * --------------------------------------------------------
+     * LOAD SHIFT
+     * --------------------------------------------------------
+     */
+
+    const {
+      data: shift,
+      error: shiftError,
+    } =
+      await supabase
+        .from("shifts")
+        .select("*")
+        .eq(
+          "id",
+          timesheet.shift_id
+        )
+        .maybeSingle();
+
+    if (shiftError) {
+      throw shiftError;
+    }
+
+    if (!shift) {
+      return NextResponse.json(
+        {
+          error:
+            "Shift not found.",
+        },
+        {
+          status: 404,
+        }
+      );
+    }
+
+    /*
+     * --------------------------------------------------------
+     * SECURITY
+     * --------------------------------------------------------
+     *
+     * Only:
+     *
+     * 1. creator of shift
+     *
+     * OR
+     *
+     * 2. owner of company
+     *
+     * can pay.
+     */
+
+    let employerAuthorised =
+      shift.created_by ===
+      user.id;
+
+    if (
+      !employerAuthorised &&
+      shift.company_id
+    ) {
+      const {
+        data: company,
+        error: companyError,
+      } =
+        await supabase
+          .from("companies")
+          .select(
+            "id,owner_id"
+          )
+          .eq(
+            "id",
+            shift.company_id
+          )
+          .maybeSingle();
+
+      if (companyError) {
+        throw companyError;
+      }
+
+      employerAuthorised =
+        company?.owner_id ===
+        user.id;
+    }
+
+    if (
+      !employerAuthorised
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "You are not authorised to pay this invoice.",
         },
         {
           status: 403,
@@ -417,350 +546,506 @@ export async function POST(
     }
 
     /*
-     * --------------------------------------------------------
-     * REQUEST BODY
-     * --------------------------------------------------------
+     * ========================================================
+     * IMPORTANT CHANGE
+     * ========================================================
+     *
+     * WE DO NOT CHECK:
+     *
+     * stripe_account_id
+     * Stripe Connect
+     * payouts_enabled
+     * connected accounts
+     *
+     * Employer payment goes entirely
+     * to the CareStaffing Stripe account.
      */
-
-    const body =
-      await req
-        .json()
-        .catch(() => ({}));
-
-    const baseUrl =
-      getBaseUrl(req);
-
-    const refreshUrl =
-      typeof body.refreshUrl ===
-        "string" &&
-      body.refreshUrl.trim()
-        ? body.refreshUrl.trim()
-        : `${baseUrl}/profile?stripe=refresh`;
-
-    const returnUrl =
-      typeof body.returnUrl ===
-        "string" &&
-      body.returnUrl.trim()
-        ? body.returnUrl.trim()
-        : `${baseUrl}/profile?stripe=connected`;
 
     /*
      * --------------------------------------------------------
-     * EXISTING STRIPE ACCOUNT ID
+     * AMOUNT
      * --------------------------------------------------------
      */
 
-    let accountId =
-      profile.stripe_account_id
-        ? String(
-            profile.stripe_account_id
-          ).trim()
-        : "";
-
-    let account:
-      Stripe.Account;
-
-    /*
-     * --------------------------------------------------------
-     * CREATE STRIPE EXPRESS ACCOUNT
-     * --------------------------------------------------------
-     */
-
-    if (!accountId) {
-      const fullName =
-        [
-          profile.first_name,
-          profile.surname,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .trim();
-
-      account =
-        await stripe.accounts.create(
-          {
-            type: "express",
-
-            country:
-              stripeCountry(
-                profile.country
-              ),
-
-            email:
-              profile.email ||
-              user.email ||
-              undefined,
-
-            business_type:
-              "individual",
-
-            capabilities: {
-              transfers: {
-                requested: true,
-              },
-            },
-
-            business_profile: {
-              product_description:
-                "Healthcare professional services provided through CareStaffing.",
-            },
-
-            metadata: {
-              carestaffing:
-                "true",
-
-              carestaffing_user_id:
-                user.id,
-
-              profile_id:
-                user.id,
-
-              full_name:
-                fullName ||
-                "Healthcare Professional",
-            },
-          }
-        );
-
-      accountId =
-        account.id;
-
-      const status =
-        getStripeAccountStatus(
-          account
-        );
-
-      const {
-        error: updateError,
-      } =
-        await supabase
-          .from("profiles")
-          .update({
-            stripe_account_id:
-              account.id,
-
-            stripe_onboarding_complete:
-              status.requirementsComplete,
-
-            stripe_charges_enabled:
-              status.chargesEnabled,
-
-            stripe_payouts_enabled:
-              status.payoutsEnabled,
-
-            updated_at:
-              new Date().toISOString(),
-          })
-          .eq(
-            "id",
-            user.id
-          );
-
-      if (updateError) {
-        throw updateError;
-      }
-
-      console.log(
-        "Stripe Express account created:",
-        account.id
+    const invoiceTotal =
+      Number(
+        calculateInvoiceTotal(
+          timesheet,
+          shift
+        ).toFixed(2)
       );
-    } else {
-      /*
-       * --------------------------------------------------------
-       * RETRIEVE EXISTING ACCOUNT
-       * --------------------------------------------------------
-       */
 
-      try {
-        account =
-          await stripe.accounts.retrieve(
-            accountId
-          );
-      } catch (error) {
-        console.error(
-          "Could not retrieve existing Stripe Connect account:",
-          error
-        );
-
-        return NextResponse.json(
-          {
-            error:
-              "The saved Stripe Connect account could not be found. The payout account may need to be reconnected.",
-
-            code:
-              "STRIPE_ACCOUNT_NOT_FOUND",
-          },
-          {
-            status: 400,
-          }
-        );
-      }
-
-      const status =
-        getStripeAccountStatus(
-          account
-        );
-
-      const {
-        error: updateError,
-      } =
-        await supabase
-          .from("profiles")
-          .update({
-            stripe_onboarding_complete:
-              status.requirementsComplete,
-
-            stripe_charges_enabled:
-              status.chargesEnabled,
-
-            stripe_payouts_enabled:
-              status.payoutsEnabled,
-
-            updated_at:
-              new Date().toISOString(),
-          })
-          .eq(
-            "id",
-            user.id
-          );
-
-      if (updateError) {
-        throw updateError;
-      }
-
-      /*
-       * If already ready for payouts,
-       * do not create another onboarding link.
-       */
-      if (status.fullyReady) {
-        return NextResponse.json(
-          {
-            success: true,
-
-            alreadyConnected:
-              true,
-
-            onboardingComplete:
-              true,
-
-            accountId:
-              account.id,
-
-            payoutsEnabled:
-              status.payoutsEnabled,
-
-            chargesEnabled:
-              status.chargesEnabled,
-
-            requirements: {
-              currentlyDue:
-                status.currentlyDue,
-
-              eventuallyDue:
-                status.eventuallyDue,
-
-              pastDue:
-                status.pastDue,
-            },
-
-            message:
-              "Stripe payouts are already connected and ready.",
-          }
-        );
-      }
+    if (
+      !Number.isFinite(
+        invoiceTotal
+      ) ||
+      invoiceTotal <= 0
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "The approved timesheet has no payable amount.",
+        },
+        {
+          status: 400,
+        }
+      );
     }
 
     /*
      * --------------------------------------------------------
-     * CREATE ONBOARDING LINK
+     * INTERNAL CARESTAFFING ACCOUNTING
+     * --------------------------------------------------------
+     *
+     * Stripe receives 100% into the
+     * CareStaffing account.
+     *
+     * These amounts are only recorded
+     * internally for settlement.
+     */
+
+    const employerTotalCents =
+      toCents(
+        invoiceTotal
+      );
+
+    const platformFeeCents =
+      Math.round(
+        employerTotalCents *
+          0.1
+      );
+
+    const professionalAmountCents =
+      employerTotalCents -
+      platformFeeCents;
+
+    const employerTotal =
+      employerTotalCents /
+      100;
+
+    const platformFee =
+      platformFeeCents /
+      100;
+
+    const professionalAmount =
+      professionalAmountCents /
+      100;
+
+    const currency =
+      String(
+        shift.currency ||
+          "ZAR"
+      ).toLowerCase();
+
+    /*
+     * --------------------------------------------------------
+     * CHECK PAYMENT RECORD
      * --------------------------------------------------------
      */
 
-    const accountLink =
-      await stripe.accountLinks.create(
+    const {
+      data:
+        existingPayment,
+      error:
+        existingPaymentError,
+    } =
+      await supabase
+        .from("payments")
+        .select("*")
+        .eq(
+          "timesheet_id",
+          timesheet.id
+        )
+        .maybeSingle();
+
+    if (
+      existingPaymentError
+    ) {
+      throw existingPaymentError;
+    }
+
+    /*
+     * Do not allow duplicate payment.
+     */
+
+    if (
+      existingPayment &&
+      [
+        "paid",
+        "succeeded",
+      ].includes(
+        String(
+          existingPayment
+            .payment_status ||
+            ""
+        ).toLowerCase()
+      )
+    ) {
+      return NextResponse.json(
         {
-          account:
-            accountId,
+          error:
+            "This invoice has already been paid.",
 
-          refresh_url:
-            refreshUrl,
-
-          return_url:
-            returnUrl,
-
-          type:
-            "account_onboarding",
+          paymentId:
+            existingPayment.id,
+        },
+        {
+          status: 409,
         }
       );
+    }
 
     /*
      * --------------------------------------------------------
-     * STATUS
+     * CHECKOUT URLs
      * --------------------------------------------------------
      */
 
-    const latestStatus =
-      getStripeAccountStatus(
-        account
-      );
+    const baseUrl =
+      getBaseUrl(req);
+
+    const successUrl =
+      `${baseUrl}/employer/shifts` +
+      `?payment=success` +
+      `&session_id={CHECKOUT_SESSION_ID}`;
+
+    const cancelUrl =
+      `${baseUrl}/employer/payments` +
+      `?timesheet=${encodeURIComponent(
+        timesheet.id
+      )}` +
+      `&payment=cancelled`;
+
+    /*
+     * ========================================================
+     * STRIPE CHECKOUT
+     * ========================================================
+     *
+     * NORMAL PAYMENT
+     *
+     * No Connect.
+     * No destination.
+     * No application fee.
+     * No transfer.
+     *
+     * 100% goes into the
+     * CareStaffing Stripe account.
+     */
+
+    const session =
+      await stripe
+        .checkout
+        .sessions
+        .create({
+          mode:
+            "payment",
+
+          success_url:
+            successUrl,
+
+          cancel_url:
+            cancelUrl,
+
+          customer_email:
+            user.email ||
+            undefined,
+
+          line_items: [
+            {
+              quantity: 1,
+
+              price_data: {
+                currency,
+
+                unit_amount:
+                  employerTotalCents,
+
+                product_data: {
+                  name:
+                    shift.title ||
+                    "CareStaffing healthcare shift",
+
+                  description:
+                    `Approved CareStaffing timesheet • ` +
+                    `${Number(
+                      timesheet.hours_worked ||
+                        0
+                    ).toFixed(
+                      2
+                    )} hours`,
+                },
+              },
+            },
+          ],
+
+          /*
+           * Standard PaymentIntent.
+           *
+           * Metadata only.
+           *
+           * NO transfer_data.
+           * NO application_fee_amount.
+           */
+          payment_intent_data:
+            {
+              metadata: {
+                carestaffing:
+                  "true",
+
+                payment_model:
+                  "single_platform_payment",
+
+                timesheet_id:
+                  timesheet.id,
+
+                shift_id:
+                  timesheet.shift_id,
+
+                professional_id:
+                  timesheet.locum_id,
+
+                employer_id:
+                  user.id,
+              },
+            },
+
+          metadata: {
+            carestaffing:
+              "true",
+
+            payment_model:
+              "single_platform_payment",
+
+            timesheet_id:
+              timesheet.id,
+
+            shift_id:
+              timesheet.shift_id,
+
+            professional_id:
+              timesheet.locum_id,
+
+            employer_id:
+              user.id,
+
+            employer_total:
+              employerTotal.toFixed(
+                2
+              ),
+
+            platform_fee:
+              platformFee.toFixed(
+                2
+              ),
+
+            professional_amount:
+              professionalAmount.toFixed(
+                2
+              ),
+          },
+        });
 
     /*
      * --------------------------------------------------------
-     * RETURN
+     * SAVE PENDING PAYMENT
      * --------------------------------------------------------
      */
+
+    const paymentPayload =
+      {
+        timesheet_id:
+          timesheet.id,
+
+        shift_id:
+          timesheet.shift_id,
+
+        employer_id:
+          user.id,
+
+        /*
+         * Keep locum_id because
+         * your existing database and
+         * Payments page use this field.
+         */
+        locum_id:
+          timesheet.locum_id,
+
+        gross_amount:
+          employerTotal,
+
+        employer_total:
+          employerTotal,
+
+        /*
+         * Internal CareStaffing
+         * accounting only.
+         */
+        platform_fee:
+          platformFee,
+
+        locum_amount:
+          professionalAmount,
+
+        payment_status:
+          "pending",
+
+        /*
+         * Professional will be paid
+         * separately after CareStaffing
+         * receives the employer payment.
+         */
+        payout_status:
+          "pending",
+
+        stripe_checkout_session_id:
+          session.id,
+
+        stripe_payment_intent_id:
+          typeof session.payment_intent ===
+          "string"
+            ? session.payment_intent
+            : null,
+
+        updated_at:
+          new Date().toISOString(),
+      };
+
+    let paymentId:
+      | string
+      | null = null;
+
+    /*
+     * --------------------------------------------------------
+     * EXISTING PENDING PAYMENT
+     * --------------------------------------------------------
+     */
+
+    if (
+      existingPayment
+    ) {
+      const {
+        data:
+          updatedPayment,
+        error:
+          updatePaymentError,
+      } =
+        await supabase
+          .from("payments")
+          .update(
+            paymentPayload
+          )
+          .eq(
+            "id",
+            existingPayment.id
+          )
+          .select("id")
+          .single();
+
+      if (
+        updatePaymentError
+      ) {
+        throw updatePaymentError;
+      }
+
+      paymentId =
+        updatedPayment.id;
+    } else {
+      /*
+       * ------------------------------------------------------
+       * NEW PAYMENT RECORD
+       * ------------------------------------------------------
+       */
+
+      const {
+        data:
+          insertedPayment,
+        error:
+          insertPaymentError,
+      } =
+        await supabase
+          .from("payments")
+          .insert(
+            paymentPayload
+          )
+          .select("id")
+          .single();
+
+      if (
+        insertPaymentError
+      ) {
+        throw insertPaymentError;
+      }
+
+      paymentId =
+        insertedPayment.id;
+    }
+
+    /*
+     * --------------------------------------------------------
+     * SUCCESS
+     * --------------------------------------------------------
+     */
+
+    console.log(
+      "CareStaffing Stripe Checkout created:",
+      session.id
+    );
+
+    console.log(
+      "Employer payment:",
+      employerTotal
+    );
+
+    console.log(
+      "CareStaffing fee recorded:",
+      platformFee
+    );
+
+    console.log(
+      "Healthcare professional amount due:",
+      professionalAmount
+    );
 
     return NextResponse.json(
       {
         success: true,
 
-        alreadyConnected:
-          false,
+        paymentModel:
+          "single_platform_payment",
 
-        onboardingComplete:
-          latestStatus.requirementsComplete,
+        paymentId,
 
-        payoutsEnabled:
-          latestStatus.payoutsEnabled,
-
-        chargesEnabled:
-          latestStatus.chargesEnabled,
-
-        accountId,
+        checkoutSessionId:
+          session.id,
 
         url:
-          accountLink.url,
+          session.url,
 
-        expiresAt:
-          accountLink.expires_at,
+        amounts: {
+          employerTotal,
 
-        requirements: {
-          currentlyDue:
-            latestStatus.currentlyDue,
+          platformFee,
 
-          eventuallyDue:
-            latestStatus.eventuallyDue,
+          professionalAmount,
 
-          pastDue:
-            latestStatus.pastDue,
+          currency:
+            currency.toUpperCase(),
         },
-
-        message:
-          "Stripe onboarding link created.",
       }
     );
   } catch (error) {
     console.error(
-      "Stripe Connect onboarding error:",
+      "CareStaffing Stripe Checkout error:",
       error
     );
 
     return NextResponse.json(
       {
         error:
-          error instanceof Error
+          error instanceof
+          Error
             ? error.message
-            : "Could not create Stripe Connect onboarding link.",
+            : "Could not create Stripe Checkout session.",
       },
       {
         status: 500,
