@@ -7,24 +7,29 @@ export const dynamic = "force-dynamic";
 
 /*
  * ============================================================
- * ENVIRONMENT VARIABLES
+ * ENVIRONMENT
  * ============================================================
  */
 
 const stripeSecretKey =
-  process.env.STRIPE_SECRET_KEY || "";
+  (process.env.STRIPE_SECRET_KEY || "")
+    .trim()
+    .replace(/[\r\n]/g, "");
 
 const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  (process.env.NEXT_PUBLIC_SUPABASE_URL || "")
+    .trim();
 
-const supabaseSecretKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const supabaseServiceRoleKey =
+  (process.env.SUPABASE_SERVICE_ROLE_KEY || "")
+    .trim()
+    .replace(/[\r\n]/g, "");
 
 const stripe = new Stripe(stripeSecretKey);
 
 /*
  * ============================================================
- * SUPABASE ADMIN CLIENT
+ * SUPABASE ADMIN
  * ============================================================
  */
 
@@ -35,7 +40,7 @@ function getAdminSupabase() {
     );
   }
 
-  if (!supabaseSecretKey) {
+  if (!supabaseServiceRoleKey) {
     throw new Error(
       "SUPABASE_SERVICE_ROLE_KEY is not configured."
     );
@@ -43,7 +48,7 @@ function getAdminSupabase() {
 
   return createClient(
     supabaseUrl,
-    supabaseSecretKey,
+    supabaseServiceRoleKey,
     {
       auth: {
         persistSession: false,
@@ -66,16 +71,7 @@ async function getAuthenticatedUser(
   const authorization =
     req.headers.get("authorization");
 
-  console.log(
-    "Stripe checkout auth header present:",
-    Boolean(authorization)
-  );
-
   if (!authorization) {
-    console.error(
-      "Stripe checkout: Authorization header missing."
-    );
-
     return {
       user: null,
       error:
@@ -86,27 +82,19 @@ async function getAuthenticatedUser(
   if (
     !authorization.startsWith("Bearer ")
   ) {
-    console.error(
-      "Stripe checkout: Authorization header is not Bearer."
-    );
-
     return {
       user: null,
       error:
-        "Invalid Authorization header.",
+        "Authorization header is invalid.",
     };
   }
 
   const accessToken =
     authorization
-      .substring(7)
+      .slice("Bearer ".length)
       .trim();
 
   if (!accessToken) {
-    console.error(
-      "Stripe checkout: Bearer token is empty."
-    );
-
     return {
       user: null,
       error:
@@ -114,71 +102,40 @@ async function getAuthenticatedUser(
     };
   }
 
-  console.log(
-    "Stripe checkout token received:",
-    accessToken.length,
-    "characters"
-  );
-
   const supabase =
     getAdminSupabase();
 
-  /*
-   * IMPORTANT
-   *
-   * getUser(accessToken) asks Supabase Auth to
-   * validate the logged-in user's JWT.
-   */
   const {
-    data,
+    data: { user },
     error,
   } =
     await supabase.auth.getUser(
       accessToken
     );
 
-  if (error) {
+  if (error || !user) {
     console.error(
-      "Supabase getUser failed:",
-      error.message,
-      error.status
+      "Employer authentication failed:",
+      error
     );
 
     return {
       user: null,
       error:
-        error.message ||
+        error?.message ||
         "Supabase rejected the login token.",
     };
   }
 
-  if (!data?.user) {
-    console.error(
-      "Supabase returned no authenticated user."
-    );
-
-    return {
-      user: null,
-      error:
-        "Supabase returned no authenticated user.",
-    };
-  }
-
-  console.log(
-    "Stripe employer authenticated:",
-    data.user.id,
-    data.user.email
-  );
-
   return {
-    user: data.user,
+    user,
     error: null,
   };
 }
 
 /*
  * ============================================================
- * APP URL
+ * BASE URL
  * ============================================================
  */
 
@@ -193,10 +150,9 @@ function getBaseUrl(
 
   if (configured) {
     const clean =
-      configured.replace(
-        /\/+$/,
-        ""
-      );
+      configured
+        .trim()
+        .replace(/\/+$/, "");
 
     if (
       clean.startsWith("http://") ||
@@ -217,20 +173,24 @@ function getBaseUrl(
  * ============================================================
  */
 
-function toCents(
-  value: number
-) {
+function toCents(value: number) {
   return Math.round(
     value * 100
   );
 }
+
+/*
+ * ============================================================
+ * INVOICE TOTAL
+ * ============================================================
+ */
 
 function calculateInvoiceTotal(
   timesheet: any,
   shift: any
 ) {
   /*
-   * Prefer final approved timesheet total.
+   * Prefer stored approved total.
    */
   const storedTotal =
     Number(
@@ -243,8 +203,8 @@ function calculateInvoiceTotal(
   }
 
   /*
-   * Otherwise calculate from approved
-   * hours × agreed rate.
+   * Otherwise:
+   * approved hours × agreed rate.
    */
   const agreedRate =
     Number(
@@ -271,7 +231,7 @@ function calculateInvoiceTotal(
   /*
    * Fallback to shift rate.
    */
-  const locumRate =
+  const rate =
     Number(
       shift.locum_rate ||
         shift.hourly_rate ||
@@ -289,12 +249,12 @@ function calculateInvoiceTotal(
     hoursWorked > 0
   ) {
     return (
-      locumRate *
+      rate *
       hoursWorked
     );
   }
 
-  return locumRate;
+  return rate;
 }
 
 /*
@@ -309,7 +269,7 @@ export async function POST(
   try {
     /*
      * --------------------------------------------------------
-     * CHECK ENVIRONMENT
+     * ENV CHECK
      * --------------------------------------------------------
      */
 
@@ -327,7 +287,7 @@ export async function POST(
 
     if (
       !supabaseUrl ||
-      !supabaseSecretKey
+      !supabaseServiceRoleKey
     ) {
       return NextResponse.json(
         {
@@ -352,16 +312,10 @@ export async function POST(
       );
 
     if (!auth.user) {
-      console.error(
-        "Employer authentication rejected:",
-        auth.error
-      );
-
       return NextResponse.json(
         {
           error:
             "Unauthorised.",
-
           detail:
             auth.error,
         },
@@ -381,7 +335,9 @@ export async function POST(
      */
 
     const body =
-      await req.json();
+      await req
+        .json()
+        .catch(() => ({}));
 
     const timesheetId =
       String(
@@ -401,11 +357,6 @@ export async function POST(
         }
       );
     }
-
-    console.log(
-      "Stripe checkout timesheet:",
-      timesheetId
-    );
 
     const supabase =
       getAdminSupabase();
@@ -430,11 +381,6 @@ export async function POST(
         .maybeSingle();
 
     if (timesheetError) {
-      console.error(
-        "Timesheet lookup error:",
-        timesheetError
-      );
-
       throw timesheetError;
     }
 
@@ -452,18 +398,15 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * MUST BE APPROVED
+     * APPROVED ONLY
      * --------------------------------------------------------
      */
 
-    const timesheetStatus =
+    if (
       String(
         timesheet.status ||
           ""
-      ).toLowerCase();
-
-    if (
-      timesheetStatus !==
+      ).toLowerCase() !==
       "approved"
     ) {
       return NextResponse.json(
@@ -477,9 +420,7 @@ export async function POST(
       );
     }
 
-    if (
-      !timesheet.shift_id
-    ) {
+    if (!timesheet.shift_id) {
       return NextResponse.json(
         {
           error:
@@ -491,13 +432,11 @@ export async function POST(
       );
     }
 
-    if (
-      !timesheet.locum_id
-    ) {
+    if (!timesheet.locum_id) {
       return NextResponse.json(
         {
           error:
-            "Timesheet has no locum linked to it.",
+            "Timesheet has no healthcare professional linked to it.",
         },
         {
           status: 400,
@@ -525,11 +464,6 @@ export async function POST(
         .maybeSingle();
 
     if (shiftError) {
-      console.error(
-        "Shift lookup error:",
-        shiftError
-      );
-
       throw shiftError;
     }
 
@@ -547,33 +481,13 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * EMPLOYER SECURITY CHECK
+     * EMPLOYER AUTHORISATION
      * --------------------------------------------------------
-     *
-     * The authenticated employer must either:
-     *
-     * 1. have created the shift; OR
-     * 2. own the company attached to the shift.
      */
 
     let employerAuthorised =
       shift.created_by ===
       user.id;
-
-    console.log(
-      "Shift creator:",
-      shift.created_by
-    );
-
-    console.log(
-      "Logged employer:",
-      user.id
-    );
-
-    console.log(
-      "Company ID:",
-      shift.company_id
-    );
 
     if (
       !employerAuthorised &&
@@ -595,31 +509,19 @@ export async function POST(
           .maybeSingle();
 
       if (companyError) {
-        console.error(
-          "Company lookup error:",
-          companyError
-        );
-
         throw companyError;
       }
-
-      console.log(
-        "Company owner:",
-        company?.owner_id
-      );
 
       employerAuthorised =
         company?.owner_id ===
         user.id;
     }
 
-    if (
-      !employerAuthorised
-    ) {
+    if (!employerAuthorised) {
       return NextResponse.json(
         {
           error:
-            "You are not authorised to pay this timesheet.",
+            "You are not authorised to pay this invoice.",
         },
         {
           status: 403,
@@ -628,127 +530,23 @@ export async function POST(
     }
 
     /*
-     * --------------------------------------------------------
-     * LOCUM PROFILE
-     * --------------------------------------------------------
+     * ========================================================
+     * SINGLE PAYMENT MODEL
+     * ========================================================
+     *
+     * NO Stripe Connect.
+     * NO recipient Stripe account.
+     * NO payout onboarding.
+     * NO transfer_data.
+     * NO application_fee_amount.
+     *
+     * Employer pays 100% into
+     * CareStaffing Stripe account.
      */
-
-    const {
-      data: locumProfile,
-      error:
-        locumProfileError,
-    } =
-      await supabase
-        .from("profiles")
-        .select("*")
-        .eq(
-          "id",
-          timesheet.locum_id
-        )
-        .maybeSingle();
-
-    if (
-      locumProfileError
-    ) {
-      console.error(
-        "Locum profile error:",
-        locumProfileError
-      );
-
-      throw locumProfileError;
-    }
-
-    if (!locumProfile) {
-      return NextResponse.json(
-        {
-          error:
-            "Locum profile could not be found.",
-        },
-        {
-          status: 404,
-        }
-      );
-    }
 
     /*
      * --------------------------------------------------------
-     * STRIPE CONNECT
-     * --------------------------------------------------------
-     */
-
-    if (
-      !locumProfile
-        .stripe_account_id
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "The locum has not completed Stripe payout onboarding yet.",
-
-          code:
-            "LOCUM_STRIPE_NOT_CONNECTED",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
-
-    let connectedAccount:
-      Stripe.Account;
-
-    try {
-      connectedAccount =
-        await stripe.accounts.retrieve(
-          locumProfile
-            .stripe_account_id
-        );
-    } catch (stripeAccountError) {
-      console.error(
-        "Stripe Connect account lookup error:",
-        stripeAccountError
-      );
-
-      return NextResponse.json(
-        {
-          error:
-            "The locum Stripe Connect account could not be verified.",
-
-          code:
-            "LOCUM_STRIPE_ACCOUNT_INVALID",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
-
-    /*
-     * Stripe normally requires both
-     * charges and payouts capability.
-     */
-
-    if (
-      !connectedAccount
-        .payouts_enabled
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "The locum Stripe account is not ready to receive payouts.",
-
-          code:
-            "LOCUM_PAYOUTS_NOT_ENABLED",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
-
-    /*
-     * --------------------------------------------------------
-     * INVOICE AMOUNT
+     * CALCULATE AMOUNT
      * --------------------------------------------------------
      */
 
@@ -779,8 +577,13 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * CARESTAFFING 10 / 90 SPLIT
+     * INTERNAL ACCOUNTING
      * --------------------------------------------------------
+     *
+     * Stripe receives full payment.
+     *
+     * 10 / 90 split is now only
+     * recorded internally.
      */
 
     const employerTotalCents =
@@ -794,7 +597,7 @@ export async function POST(
           0.1
       );
 
-    const locumAmountCents =
+    const professionalAmountCents =
       employerTotalCents -
       platformFeeCents;
 
@@ -806,15 +609,9 @@ export async function POST(
       platformFeeCents /
       100;
 
-    const locumAmount =
-      locumAmountCents /
+    const professionalAmount =
+      professionalAmountCents /
       100;
-
-    /*
-     * --------------------------------------------------------
-     * CURRENCY
-     * --------------------------------------------------------
-     */
 
     const currency =
       String(
@@ -824,13 +621,12 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * CHECK EXISTING PAYMENT
+     * EXISTING PAYMENT
      * --------------------------------------------------------
      */
 
     const {
-      data:
-        existingPayment,
+      data: existingPayment,
       error:
         existingPaymentError,
     } =
@@ -866,7 +662,6 @@ export async function POST(
         {
           error:
             "This invoice has already been paid.",
-
           paymentId:
             existingPayment.id,
         },
@@ -878,7 +673,7 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * URLS
+     * CHECKOUT URLS
      * --------------------------------------------------------
      */
 
@@ -899,7 +694,7 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * CREATE STRIPE CHECKOUT
+     * STANDARD STRIPE CHECKOUT
      * --------------------------------------------------------
      */
 
@@ -908,7 +703,8 @@ export async function POST(
         .checkout
         .sessions
         .create({
-          mode: "payment",
+          mode:
+            "payment",
 
           success_url:
             successUrl,
@@ -930,47 +726,36 @@ export async function POST(
                 unit_amount:
                   employerTotalCents,
 
-                product_data:
-                  {
-                    name:
-                      shift.title ||
-                      "CareStaffing locum shift",
+                product_data: {
+                  name:
+                    shift.title ||
+                    "CareStaffing healthcare shift",
 
-                    description:
-                      `Approved locum timesheet • ` +
-                      `${Number(
-                        timesheet.hours_worked ||
-                          0
-                      ).toFixed(
-                        2
-                      )} hours`,
-                  },
+                  description:
+                    `Approved CareStaffing timesheet • ` +
+                    `${Number(
+                      timesheet.hours_worked ||
+                        0
+                    ).toFixed(
+                      2
+                    )} hours`,
+                },
               },
             },
           ],
 
           /*
-           * Stripe Connect destination charge
-           *
-           * Employer pays full amount.
-           * CareStaffing keeps 10%.
-           * Remaining 90% transfers to locum.
+           * Standard PaymentIntent.
+           * Metadata only.
            */
           payment_intent_data:
             {
-              application_fee_amount:
-                platformFeeCents,
-
-              transfer_data:
-                {
-                  destination:
-                    locumProfile
-                      .stripe_account_id,
-                },
-
               metadata: {
                 carestaffing:
                   "true",
+
+                payment_model:
+                  "single_platform_payment",
 
                 timesheet_id:
                   timesheet.id,
@@ -978,7 +763,7 @@ export async function POST(
                 shift_id:
                   timesheet.shift_id,
 
-                locum_id:
+                professional_id:
                   timesheet.locum_id,
 
                 employer_id:
@@ -990,13 +775,16 @@ export async function POST(
             carestaffing:
               "true",
 
+            payment_model:
+              "single_platform_payment",
+
             timesheet_id:
               timesheet.id,
 
             shift_id:
               timesheet.shift_id,
 
-            locum_id:
+            professional_id:
               timesheet.locum_id,
 
             employer_id:
@@ -1012,8 +800,8 @@ export async function POST(
                 2
               ),
 
-            locum_amount:
-              locumAmount.toFixed(
+            professional_amount:
+              professionalAmount.toFixed(
                 2
               ),
           },
@@ -1021,7 +809,7 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * SAVE PENDING PAYMENT
+     * SAVE PAYMENT RECORD
      * --------------------------------------------------------
      */
 
@@ -1036,6 +824,10 @@ export async function POST(
         employer_id:
           user.id,
 
+        /*
+         * Keep this column name because
+         * your current database uses it.
+         */
         locum_id:
           timesheet.locum_id,
 
@@ -1049,11 +841,18 @@ export async function POST(
           platformFee,
 
         locum_amount:
-          locumAmount,
+          professionalAmount,
 
+        /*
+         * Stripe payment not completed yet.
+         */
         payment_status:
           "pending",
 
+        /*
+         * Professional settlement
+         * happens separately.
+         */
         payout_status:
           "pending",
 
@@ -1075,12 +874,12 @@ export async function POST(
       | null = null;
 
     /*
-     * Existing pending attempt:
-     * update rather than duplicate.
+     * --------------------------------------------------------
+     * UPDATE EXISTING ATTEMPT
+     * --------------------------------------------------------
      */
-    if (
-      existingPayment
-    ) {
+
+    if (existingPayment) {
       const {
         data:
           updatedPayment,
@@ -1108,6 +907,12 @@ export async function POST(
       paymentId =
         updatedPayment.id;
     } else {
+      /*
+       * ------------------------------------------------------
+       * INSERT NEW PAYMENT
+       * ------------------------------------------------------
+       */
+
       const {
         data:
           insertedPayment,
@@ -1134,33 +939,16 @@ export async function POST(
 
     /*
      * --------------------------------------------------------
-     * SUCCESS
+     * RETURN CHECKOUT URL
      * --------------------------------------------------------
      */
-
-    console.log(
-      "Stripe checkout created:",
-      session.id
-    );
-
-    console.log(
-      "Employer total:",
-      employerTotal
-    );
-
-    console.log(
-      "CareStaffing fee:",
-      platformFee
-    );
-
-    console.log(
-      "Locum amount:",
-      locumAmount
-    );
 
     return NextResponse.json(
       {
         success: true,
+
+        paymentModel:
+          "single_platform_payment",
 
         paymentId,
 
@@ -1173,7 +961,7 @@ export async function POST(
         amounts: {
           employerTotal,
           platformFee,
-          locumAmount,
+          professionalAmount,
           currency:
             currency.toUpperCase(),
         },
@@ -1181,7 +969,7 @@ export async function POST(
     );
   } catch (error) {
     console.error(
-      "CREATE CHECKOUT ERROR:",
+      "CareStaffing Stripe Checkout error:",
       error
     );
 
