@@ -1,4 +1,4 @@
-"use client";
+
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -552,6 +552,17 @@ export default function EmployerPage() {
 
           <div style={styles.topActions}>
             <Link
+              href="/employer"
+              style={{
+                ...styles.navLink,
+                color: "#0f766e",
+                fontWeight: 900,
+              }}
+            >
+              Post Shift
+            </Link>
+
+            <Link
               href="/employer/shifts"
               style={styles.navLink}
             >
@@ -563,6 +574,13 @@ export default function EmployerPage() {
               style={styles.navLink}
             >
               Applicants
+            </Link>
+
+            <Link
+              href="/employer/locum-directory"
+              style={styles.navLink}
+            >
+              Locum Directory
             </Link>
 
             <Link
