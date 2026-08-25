@@ -1,65 +1,87 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 type Locum = {
-  id: number;
-  created_at?: string | null;
-
+  id: string;
   first_name?: string | null;
   surname?: string | null;
-  full_name?: string | null;
-
-  profession?: string | null;
-
   email?: string | null;
   mobile?: string | null;
-
+  profession?: string | null;
   registration_number?: string | null;
   practice_number?: string | null;
 
-  practice_name?: string | null;
-  practice_address?: string | null;
-  practice_full_address?: string | null;
-
-  suburb?: string | null;
-  city?: string | null;
   province?: string | null;
-  postal_code?: string | null;
+  city?: string | null;
+  location?: string | null;
   country?: string | null;
 
-  qualifications?: string | null;
-  skills?: string | null;
+  practice_name?: string | null;
+  practice?: string | null;
+  employer_name?: string | null;
 
-  pimart_permit?: boolean | null;
-  pcdt_permit?: boolean | null;
+  availability?: string | boolean | null;
+  available?: boolean | null;
 
-  available_for_locum?: boolean | null;
+  profile_photo_url?: string | null;
+  avatar_url?: string | null;
 };
 
-function clean(value?: string | null) {
-  return value?.trim() || "";
+function clean(value: unknown) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
 }
 
-function getFullName(locum: Locum) {
-  if (clean(locum.full_name)) {
-    return clean(locum.full_name);
-  }
-
-  return `${clean(locum.first_name)} ${clean(locum.surname)}`.trim();
+function fullName(locum: Locum) {
+  const name = `${clean(locum.first_name)} ${clean(locum.surname)}`.trim();
+  return name || "Healthcare Professional";
 }
 
-function getProfession(locum: Locum) {
-  const value = clean(locum.profession);
+function initials(locum: Locum) {
+  const first = clean(locum.first_name).charAt(0);
+  const surname = clean(locum.surname).charAt(0);
 
-  if (!value) {
-    return "Healthcare Professional";
-  }
+  return `${first}${surname}`.toUpperCase() || "HP";
+}
 
-  if (value.toLowerCase().includes("pcdt")) {
-    return "Pharmacist";
+function displayLocation(locum: Locum) {
+  return (
+    clean(locum.location) ||
+    clean(locum.city) ||
+    clean(locum.province) ||
+    "-"
+  );
+}
+
+function displayPractice(locum: Locum) {
+  return (
+    clean(locum.practice_name) ||
+    clean(locum.practice) ||
+    clean(locum.employer_name) ||
+    "-"
+  );
+}
+
+function isAvailable(locum: Locum) {
+  if (locum.available === true) return true;
+
+  const availability = clean(locum.availability).toLowerCase();
+
+  return (
+    availability === "available" ||
+    availability === "true" ||
+    availability === "yes"
+  );
+}
+
+function normalizePhone(phone: string) {
+  let value = phone.replace(/[^\d+]/g, "");
+
+  // South African local number
+  if (value.startsWith("0") && value.length >= 10) {
+    value = `+27${value.substring(1)}`;
   }
 
   return value;
@@ -68,174 +90,170 @@ function getProfession(locum: Locum) {
 export default function LocumDirectoryPage() {
   const [locums, setLocums] = useState<Locum[]>([]);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
 
-  const [search, setSearch] = useState("");
   const [professionFilter, setProfessionFilter] = useState("All");
   const [provinceFilter, setProvinceFilter] = useState("All");
-  const [permitFilter, setPermitFilter] = useState("All");
-  const [availabilityFilter, setAvailabilityFilter] =
-    useState("Available");
+  const [availabilityFilter, setAvailabilityFilter] = useState("All");
+  const [search, setSearch] = useState("");
+
+  const [selectedLocum, setSelectedLocum] = useState<Locum | null>(null);
+
+  const [subject, setSubject] = useState("");
+  const [message, setMessage] = useState("");
+
+  const [employerName, setEmployerName] = useState("");
+  const [employerEmail, setEmployerEmail] = useState("");
+
+  const [sending, setSending] = useState(false);
+  const [sendStatus, setSendStatus] = useState("");
 
   useEffect(() => {
-    loadLocums();
+    loadDirectory();
   }, []);
 
-  async function loadLocums() {
-    setLoading(true);
-    setMessage("");
-
+  async function loadDirectory() {
     try {
+      setLoading(true);
+      setLoadError("");
+
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
       if (!user) {
-        setMessage("Please log in to view the Locum Directory.");
-        setLoading(false);
+        setLoadError("Please sign in to view the locum directory.");
         return;
       }
 
+      setEmployerEmail(user.email || "");
+
+      // Get employer profile if available
+      const { data: employerProfile } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (employerProfile) {
+        const name =
+          clean(employerProfile.company_name) ||
+          `${clean(employerProfile.first_name)} ${clean(
+            employerProfile.surname,
+          )}`.trim();
+
+        setEmployerName(name);
+      }
+
+      /*
+       * We deliberately select "*" because imported locum data may contain
+       * additional fields.
+       *
+       * The filtering below removes employer-type records.
+       */
       const { data, error } = await supabase
-        .from("Locum_Directory")
-        .select(`
-          id,
-          created_at,
-          first_name,
-          surname,
-          full_name,
-          profession,
-          email,
-          mobile,
-          registration_number,
-          practice_number,
-          practice_name,
-          practice_address,
-          practice_full_address,
-          suburb,
-          city,
-          province,
-          postal_code,
-          country,
-          qualifications,
-          skills,
-          pimart_permit,
-          pcdt_permit,
-          available_for_locum
-        `)
-        .order("surname", { ascending: true })
-        .order("first_name", { ascending: true });
+        .from("profiles")
+        .select("*")
+        .order("surname", { ascending: true });
 
       if (error) {
-        console.error("Locum directory error:", error);
-
-        setMessage(
-          `Unable to load Locum Directory: ${error.message}`,
-        );
-
-        setLoading(false);
-        return;
+        throw error;
       }
 
-      setLocums((data || []) as Locum[]);
-    } catch (error) {
-      console.error(error);
+      const rows = (data || []) as any[];
 
-      setMessage(
-        "An unexpected error occurred while loading the Locum Directory.",
+      const healthcareProfessionals = rows.filter((row) => {
+        const role = clean(row.role).toLowerCase();
+        const accountType = clean(row.account_type).toLowerCase();
+        const userType = clean(row.user_type).toLowerCase();
+
+        if (role === "employer") return false;
+        if (accountType === "employer") return false;
+        if (userType === "employer") return false;
+
+        // Must have at least enough identifying information
+        return (
+          clean(row.first_name) ||
+          clean(row.surname) ||
+          clean(row.registration_number)
+        );
+      });
+
+      setLocums(healthcareProfessionals as Locum[]);
+    } catch (error: any) {
+      console.error("Locum directory error:", error);
+
+      setLoadError(
+        error?.message || "Could not load healthcare professionals.",
       );
     } finally {
       setLoading(false);
     }
   }
 
-  const professionOptions = useMemo(() => {
-    const values = locums
-      .map((locum) => getProfession(locum))
-      .filter(Boolean);
-
-    return ["All", ...Array.from(new Set(values)).sort()];
+  const professions = useMemo(() => {
+    return Array.from(
+      new Set(
+        locums
+          .map((locum) => clean(locum.profession))
+          .filter(Boolean),
+      ),
+    ).sort();
   }, [locums]);
 
-  const provinceOptions = useMemo(() => {
-    const values = locums
-      .map((locum) => clean(locum.province))
-      .filter(Boolean);
-
-    return ["All", ...Array.from(new Set(values)).sort()];
+  const provinces = useMemo(() => {
+    return Array.from(
+      new Set(
+        locums
+          .map((locum) => clean(locum.province))
+          .filter(Boolean),
+      ),
+    ).sort();
   }, [locums]);
 
   const filteredLocums = useMemo(() => {
-    const term = search.trim().toLowerCase();
+    const searchText = search.trim().toLowerCase();
 
     return locums.filter((locum) => {
-      const name = getFullName(locum).toLowerCase();
-      const profession = getProfession(locum);
-      const province = clean(locum.province);
+      const professionMatches =
+        professionFilter === "All" ||
+        clean(locum.profession) === professionFilter;
+
+      const provinceMatches =
+        provinceFilter === "All" ||
+        clean(locum.province) === provinceFilter;
+
+      const available = isAvailable(locum);
+
+      const availabilityMatches =
+        availabilityFilter === "All" ||
+        (availabilityFilter === "Available" && available) ||
+        (availabilityFilter === "Unavailable" && !available);
 
       const searchable = [
-        name,
-        profession,
-        province,
-        clean(locum.city),
-        clean(locum.suburb),
-        clean(locum.registration_number),
-        clean(locum.practice_number),
-        clean(locum.practice_name),
-        clean(locum.practice_full_address),
-        clean(locum.email),
-        clean(locum.mobile),
+        fullName(locum),
+        locum.profession,
+        locum.registration_number,
+        locum.province,
+        locum.city,
+        locum.location,
+        locum.practice_name,
+        locum.practice,
+        locum.email,
+        locum.mobile,
       ]
+        .map(clean)
         .join(" ")
         .toLowerCase();
 
-      const matchesSearch =
-        term === "" || searchable.includes(term);
-
-      const matchesProfession =
-        professionFilter === "All" ||
-        profession.toLowerCase() ===
-          professionFilter.toLowerCase();
-
-      const matchesProvince =
-        provinceFilter === "All" ||
-        province.toLowerCase() ===
-          provinceFilter.toLowerCase();
-
-      let matchesPermit = true;
-
-      if (permitFilter === "PIMART") {
-        matchesPermit = locum.pimart_permit === true;
-      }
-
-      if (permitFilter === "PCDT") {
-        matchesPermit = locum.pcdt_permit === true;
-      }
-
-      if (permitFilter === "PIMART or PCDT") {
-        matchesPermit =
-          locum.pimart_permit === true ||
-          locum.pcdt_permit === true;
-      }
-
-      let matchesAvailability = true;
-
-      if (availabilityFilter === "Available") {
-        matchesAvailability =
-          locum.available_for_locum !== false;
-      }
-
-      if (availabilityFilter === "Unavailable") {
-        matchesAvailability =
-          locum.available_for_locum === false;
-      }
+      const searchMatches =
+        !searchText || searchable.includes(searchText);
 
       return (
-        matchesSearch &&
-        matchesProfession &&
-        matchesProvince &&
-        matchesPermit &&
-        matchesAvailability
+        professionMatches &&
+        provinceMatches &&
+        availabilityMatches &&
+        searchMatches
       );
     });
   }, [
@@ -243,1023 +261,851 @@ export default function LocumDirectoryPage() {
     search,
     professionFilter,
     provinceFilter,
-    permitFilter,
     availabilityFilter,
   ]);
 
-  function clearFilters() {
-    setSearch("");
-    setProfessionFilter("All");
-    setProvinceFilter("All");
-    setPermitFilter("All");
-    setAvailabilityFilter("Available");
+  function openEmail(locum: Locum) {
+    if (!clean(locum.email)) {
+      alert("This healthcare professional does not have an email address.");
+      return;
+    }
+
+    setSelectedLocum(locum);
+
+    setSubject(
+      `CareStaffing opportunity for ${fullName(locum)}`,
+    );
+
+    setMessage(
+      `Dear ${clean(locum.first_name) || "Healthcare Professional"},\n\n` +
+        `We found your profile on the CareStaffing healthcare professional directory and would like to contact you regarding a locum opportunity.\n\n` +
+        `Please reply to this email if you are interested or would like more information.\n\n` +
+        `Kind regards,\n${employerName || "CareStaffing Employer"}`,
+    );
+
+    setSendStatus("");
   }
 
-  const pharmacistCount = locums.filter((locum) =>
-    getProfession(locum)
-      .toLowerCase()
-      .includes("pharmacist"),
-  ).length;
+  function closeEmail() {
+    if (sending) return;
 
-  const nurseCount = locums.filter((locum) =>
-    getProfession(locum)
-      .toLowerCase()
-      .includes("nurse"),
-  ).length;
+    setSelectedLocum(null);
+    setSendStatus("");
+  }
 
-  if (loading) {
-    return (
-      <main style={styles.loadingPage}>
-        <div style={styles.loadingCard}>
-          <h2 style={{ margin: 0 }}>
-            Loading Locum Directory...
-          </h2>
-        </div>
-      </main>
-    );
+  async function sendEmail(event: FormEvent) {
+    event.preventDefault();
+
+    if (!selectedLocum) return;
+
+    if (!selectedLocum.email) {
+      setSendStatus("Locum email address is missing.");
+      return;
+    }
+
+    if (!subject.trim()) {
+      setSendStatus("Please enter a subject.");
+      return;
+    }
+
+    if (!message.trim()) {
+      setSendStatus("Please enter a message.");
+      return;
+    }
+
+    try {
+      setSending(true);
+      setSendStatus("");
+
+      const response = await fetch("/api/locum-email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          to: selectedLocum.email,
+          locumName: fullName(selectedLocum),
+          subject: subject.trim(),
+          message: message.trim(),
+          employerName:
+            employerName.trim() || "CareStaffing Employer",
+          employerEmail: employerEmail.trim(),
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Unable to send email.");
+      }
+
+      setSendStatus(
+        `Email successfully sent to ${fullName(selectedLocum)}.`,
+      );
+
+      setTimeout(() => {
+        setSelectedLocum(null);
+        setSendStatus("");
+      }, 1600);
+    } catch (error: any) {
+      console.error("Send locum email error:", error);
+
+      setSendStatus(
+        error?.message || "Unable to send email.",
+      );
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
     <main style={styles.page}>
       <div style={styles.container}>
-        {/* TOP NAVIGATION */}
-
-        <div style={styles.navigation}>
-          <div style={styles.brand}>
-            CARESTAFFING
-          </div>
-
-          <div style={styles.navLinks}>
-            <Link
-              href="/employer/post-shift"
-              style={styles.navLink}
-            >
-              Post Shift
-            </Link>
-
-            <Link
-              href="/employer/shifts"
-              style={styles.navLink}
-            >
-              My Shifts
-            </Link>
-
-            <Link
-              href="/employer/applicants"
-              style={styles.navLink}
-            >
-              Applicants
-            </Link>
-
-            <Link
-              href="/employer/locum-directory"
-              style={styles.activeNavLink}
-            >
-              Locum Directory
-            </Link>
-
-            <Link
-              href="/employer/profile"
-              style={styles.navLink}
-            >
-              Organisation Profile
-            </Link>
-          </div>
-        </div>
-
-        {/* HERO */}
-
-        <section style={styles.hero}>
-          <div style={styles.heroLabel}>
-            EMPLOYER PORTAL
-          </div>
-
-          <h1 style={styles.heroTitle}>
-            Locum Directory
-          </h1>
-
-          <p style={styles.heroText}>
-            Search healthcare professionals by profession,
-            province, registration number and permit status.
-          </p>
-        </section>
-
-        {/* STATS */}
-
-        <section style={styles.statsGrid}>
-          <div style={styles.statCard}>
-            <span style={styles.statLabel}>
-              Total Directory
-            </span>
-
-            <strong style={styles.statNumber}>
-              {locums.length}
-            </strong>
-
-            <span style={styles.statText}>
-              Healthcare professionals
-            </span>
-          </div>
-
-          <div style={styles.statCard}>
-            <span style={styles.statLabel}>
-              Search Results
-            </span>
-
-            <strong style={styles.statNumber}>
-              {filteredLocums.length}
-            </strong>
-
-            <span style={styles.statText}>
-              Matching professionals
-            </span>
-          </div>
-
-          <div style={styles.statCard}>
-            <span style={styles.statLabel}>
-              Pharmacists
-            </span>
-
-            <strong style={styles.statNumber}>
-              {pharmacistCount}
-            </strong>
-
-            <span style={styles.statText}>
-              Directory pharmacists
-            </span>
-          </div>
-
-          <div style={styles.statCard}>
-            <span style={styles.statLabel}>
-              Nurses
-            </span>
-
-            <strong style={styles.statNumber}>
-              {nurseCount}
-            </strong>
-
-            <span style={styles.statText}>
-              Directory nurses
-            </span>
-          </div>
-        </section>
-
-        {/* SEARCH + FILTERS */}
-
-        <section style={styles.filterPanel}>
-          <div style={styles.searchRow}>
-            <input
-              type="text"
-              value={search}
-              onChange={(event) =>
-                setSearch(event.target.value)
-              }
-              placeholder="Search name, registration number, practice, city..."
-              style={styles.searchInput}
-            />
-
-            <button
-              type="button"
-              onClick={clearFilters}
-              style={styles.clearButton}
-            >
-              Clear Filters
-            </button>
-          </div>
-
-          <div style={styles.filterGrid}>
-            {/* PROFESSION */}
-
-            <label style={styles.filterGroup}>
-              <span style={styles.filterLabel}>
-                Profession
-              </span>
-
-              <select
-                value={professionFilter}
-                onChange={(event) =>
-                  setProfessionFilter(event.target.value)
-                }
-                style={styles.select}
-              >
-                {professionOptions.map((profession) => (
-                  <option
-                    key={profession}
-                    value={profession}
-                  >
-                    {profession}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {/* PROVINCE */}
-
-            <label style={styles.filterGroup}>
-              <span style={styles.filterLabel}>
-                Province
-              </span>
-
-              <select
-                value={provinceFilter}
-                onChange={(event) =>
-                  setProvinceFilter(event.target.value)
-                }
-                style={styles.select}
-              >
-                {provinceOptions.map((province) => (
-                  <option
-                    key={province}
-                    value={province}
-                  >
-                    {province}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {/* PERMIT */}
-
-            <label style={styles.filterGroup}>
-              <span style={styles.filterLabel}>
-                Permit
-              </span>
-
-              <select
-                value={permitFilter}
-                onChange={(event) =>
-                  setPermitFilter(event.target.value)
-                }
-                style={styles.select}
-              >
-                <option value="All">
-                  All Permits
-                </option>
-
-                <option value="PIMART">
-                  PIMART
-                </option>
-
-                <option value="PCDT">
-                  PCDT
-                </option>
-
-                <option value="PIMART or PCDT">
-                  PIMART or PCDT
-                </option>
-              </select>
-            </label>
-
-            {/* AVAILABILITY */}
-
-            <label style={styles.filterGroup}>
-              <span style={styles.filterLabel}>
-                Availability
-              </span>
-
-              <select
-                value={availabilityFilter}
-                onChange={(event) =>
-                  setAvailabilityFilter(
-                    event.target.value,
-                  )
-                }
-                style={styles.select}
-              >
-                <option value="Available">
-                  Available
-                </option>
-
-                <option value="All">
-                  All
-                </option>
-
-                <option value="Unavailable">
-                  Unavailable
-                </option>
-              </select>
-            </label>
-          </div>
-        </section>
-
-        {message && (
-          <div style={styles.errorBox}>
-            {message}
-          </div>
-        )}
-
-        {/* RESULTS HEADER */}
-
-        <div style={styles.resultsHeader}>
+        <div style={styles.topRow}>
           <div>
-            <h2 style={styles.resultsTitle}>
-              Healthcare Professionals
-            </h2>
+            <div style={styles.eyebrow}>CARESTAFFING</div>
 
-            <p style={styles.resultsSubtitle}>
-              Showing {filteredLocums.length} of{" "}
-              {locums.length} professionals
+            <h1 style={styles.title}>Locum Directory</h1>
+
+            <p style={styles.subtitle}>
+              Search and contact registered healthcare professionals.
             </p>
           </div>
+
+          <button
+            type="button"
+            onClick={loadDirectory}
+            style={styles.refreshButton}
+          >
+            Refresh
+          </button>
         </div>
 
-        {/* LOCUM CARDS */}
+        <div style={styles.filters}>
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search name, registration, practice..."
+            style={styles.searchInput}
+          />
 
-        {filteredLocums.length === 0 ? (
-          <div style={styles.emptyCard}>
-            <h3 style={styles.emptyTitle}>
-              No professionals found
-            </h3>
+          <select
+            value={professionFilter}
+            onChange={(event) =>
+              setProfessionFilter(event.target.value)
+            }
+            style={styles.select}
+          >
+            <option value="All">All professions</option>
 
-            <p style={styles.emptyText}>
-              Try changing the profession, province or
-              search filters.
-            </p>
+            {professions.map((profession) => (
+              <option key={profession} value={profession}>
+                {profession}
+              </option>
+            ))}
+          </select>
 
-            <button
-              type="button"
-              onClick={clearFilters}
-              style={styles.primaryButton}
-            >
-              Show All Locums
-            </button>
+          <select
+            value={provinceFilter}
+            onChange={(event) =>
+              setProvinceFilter(event.target.value)
+            }
+            style={styles.select}
+          >
+            <option value="All">All provinces</option>
+
+            {provinces.map((province) => (
+              <option key={province} value={province}>
+                {province}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={availabilityFilter}
+            onChange={(event) =>
+              setAvailabilityFilter(event.target.value)
+            }
+            style={styles.select}
+          >
+            <option value="All">All availability</option>
+            <option value="Available">Available</option>
+            <option value="Unavailable">Unavailable</option>
+          </select>
+        </div>
+
+        {loading ? (
+          <div style={styles.messageBox}>
+            Loading healthcare professionals...
           </div>
+        ) : loadError ? (
+          <div style={styles.errorBox}>{loadError}</div>
         ) : (
-          <div style={styles.cardGrid}>
-            {filteredLocums.map((locum) => {
-              const fullName =
-                getFullName(locum) ||
-                "Healthcare Professional";
+          <>
+            <div style={styles.headingRow}>
+              <div>
+                <h2 style={styles.sectionTitle}>
+                  Healthcare Professionals
+                </h2>
 
-              const profession =
-                getProfession(locum);
+                <p style={styles.resultCount}>
+                  Showing {filteredLocums.length} of {locums.length}{" "}
+                  professionals
+                </p>
+              </div>
+            </div>
 
-              const location = [
-                clean(locum.city),
-                clean(locum.province),
-              ]
-                .filter(Boolean)
-                .join(", ");
+            {filteredLocums.length === 0 ? (
+              <div style={styles.messageBox}>
+                No healthcare professionals match your filters.
+              </div>
+            ) : (
+              <div style={styles.grid}>
+                {filteredLocums.map((locum) => {
+                  const available = isAvailable(locum);
 
-              return (
-                <article
-                  key={locum.id}
-                  style={styles.card}
-                >
-                  <div style={styles.cardHeader}>
-                    <div style={styles.avatar}>
-                      {clean(locum.first_name)
-                        .charAt(0)
-                        .toUpperCase()}
+                  const photo =
+                    clean(locum.profile_photo_url) ||
+                    clean(locum.avatar_url);
 
-                      {clean(locum.surname)
-                        .charAt(0)
-                        .toUpperCase()}
-                    </div>
-
-                    <div style={{ flex: 1 }}>
-                      <h3 style={styles.name}>
-                        {fullName}
-                      </h3>
-
-                      <div style={styles.badgeRow}>
-                        <span
-                          style={styles.professionBadge}
-                        >
-                          {profession}
-                        </span>
-
-                        {locum.pimart_permit === true && (
-                          <span
-                            style={styles.permitBadge}
-                          >
-                            PIMART
-                          </span>
+                  return (
+                    <article key={locum.id} style={styles.card}>
+                      <div style={styles.profileTop}>
+                        {photo ? (
+                          <img
+                            src={photo}
+                            alt={fullName(locum)}
+                            style={styles.avatarImage}
+                          />
+                        ) : (
+                          <div style={styles.avatar}>
+                            {initials(locum)}
+                          </div>
                         )}
 
-                        {locum.pcdt_permit === true && (
-                          <span
-                            style={styles.permitBadge}
-                          >
-                            PCDT
-                          </span>
-                        )}
-                      </div>
-                    </div>
+                        <div style={styles.nameArea}>
+                          <div style={styles.nameRow}>
+                            <h3 style={styles.name}>
+                              {fullName(locum)}
+                            </h3>
 
-                    <div>
-                      {locum.available_for_locum !== false ? (
-                        <span
-                          style={styles.availableBadge}
-                        >
-                          AVAILABLE
-                        </span>
-                      ) : (
-                        <span
-                          style={styles.unavailableBadge}
-                        >
-                          UNAVAILABLE
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                            <span
+                              style={{
+                                ...styles.statusBadge,
+                                ...(available
+                                  ? styles.availableBadge
+                                  : styles.unavailableBadge),
+                              }}
+                            >
+                              {available
+                                ? "AVAILABLE"
+                                : "UNAVAILABLE"}
+                            </span>
+                          </div>
 
-                  <div style={styles.divider} />
-
-                  <div style={styles.details}>
-                    {clean(
-                      locum.registration_number,
-                    ) && (
-                      <div style={styles.detailRow}>
-                        <span
-                          style={styles.detailLabel}
-                        >
-                          Registration
-                        </span>
-
-                        <strong
-                          style={styles.detailValue}
-                        >
-                          {
-                            locum.registration_number
-                          }
-                        </strong>
-                      </div>
-                    )}
-
-                    {clean(locum.province) && (
-                      <div style={styles.detailRow}>
-                        <span
-                          style={styles.detailLabel}
-                        >
-                          Province
-                        </span>
-
-                        <span
-                          style={styles.detailValue}
-                        >
-                          {locum.province}
-                        </span>
-                      </div>
-                    )}
-
-                    {location && (
-                      <div style={styles.detailRow}>
-                        <span
-                          style={styles.detailLabel}
-                        >
-                          Location
-                        </span>
-
-                        <span
-                          style={styles.detailValue}
-                        >
-                          {location}
-                        </span>
-                      </div>
-                    )}
-
-                    {clean(
-                      locum.practice_name,
-                    ) && (
-                      <div style={styles.detailRow}>
-                        <span
-                          style={styles.detailLabel}
-                        >
-                          Practice
-                        </span>
-
-                        <span
-                          style={styles.detailValue}
-                        >
-                          {locum.practice_name}
-                        </span>
-                      </div>
-                    )}
-
-                    {!location &&
-                      clean(
-                        locum.practice_full_address,
-                      ) && (
-                        <div
-                          style={styles.detailRow}
-                        >
-                          <span
-                            style={
-                              styles.detailLabel
-                            }
-                          >
-                            Address
-                          </span>
-
-                          <span
-                            style={
-                              styles.detailValue
-                            }
-                          >
-                            {
-                              locum.practice_full_address
-                            }
-                          </span>
+                          <div style={styles.profession}>
+                            {clean(locum.profession) ||
+                              "Healthcare Professional"}
+                          </div>
                         </div>
-                      )}
-
-                    {clean(locum.mobile) && (
-                      <div style={styles.detailRow}>
-                        <span
-                          style={styles.detailLabel}
-                        >
-                          Mobile
-                        </span>
-
-                        <span
-                          style={styles.detailValue}
-                        >
-                          {locum.mobile}
-                        </span>
                       </div>
-                    )}
 
-                    {clean(locum.email) && (
-                      <div style={styles.detailRow}>
-                        <span
-                          style={styles.detailLabel}
-                        >
-                          Email
-                        </span>
+                      <div style={styles.details}>
+                        <Detail
+                          label="Registration"
+                          value={
+                            clean(locum.registration_number) || "-"
+                          }
+                        />
 
-                        <span
+                        <Detail
+                          label="Province"
+                          value={clean(locum.province) || "-"}
+                        />
+
+                        <Detail
+                          label="Location"
+                          value={displayLocation(locum)}
+                        />
+
+                        <Detail
+                          label="Practice"
+                          value={displayPractice(locum)}
+                        />
+
+                        <Detail
+                          label="Mobile"
+                          value={clean(locum.mobile) || "-"}
+                        />
+
+                        <Detail
+                          label="Email"
+                          value={clean(locum.email) || "-"}
+                        />
+                      </div>
+
+                      <div style={styles.actions}>
+                        <button
+                          type="button"
+                          disabled={!clean(locum.mobile)}
+                          onClick={() => {
+                            const phone = normalizePhone(
+                              clean(locum.mobile),
+                            );
+
+                            if (phone) {
+                              window.location.href = `tel:${phone}`;
+                            }
+                          }}
                           style={{
-                            ...styles.detailValue,
-                            wordBreak:
-                              "break-word",
+                            ...styles.callButton,
+                            opacity: clean(locum.mobile) ? 1 : 0.45,
                           }}
                         >
-                          {locum.email}
-                        </span>
+                          Call
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={!clean(locum.email)}
+                          onClick={() => openEmail(locum)}
+                          style={{
+                            ...styles.emailButton,
+                            opacity: clean(locum.email) ? 1 : 0.45,
+                          }}
+                        >
+                          Email
+                        </button>
                       </div>
-                    )}
-                  </div>
-
-                  <div style={styles.actions}>
-                    {clean(locum.mobile) ? (
-                      <a
-                        href={`tel:${locum.mobile}`}
-                        style={styles.secondaryAction}
-                      >
-                        Call
-                      </a>
-                    ) : (
-                      <button
-                        disabled
-                        style={styles.disabledAction}
-                      >
-                        Call
-                      </button>
-                    )}
-
-                    {clean(locum.email) ? (
-                      <a
-                        href={`mailto:${locum.email}`}
-                        style={styles.primaryAction}
-                      >
-                        Email
-                      </a>
-                    ) : (
-                      <button
-                        disabled
-                        style={styles.disabledAction}
-                      >
-                        Email
-                      </button>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </div>
+
+      {selectedLocum && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modal}>
+            <div style={styles.modalHeader}>
+              <div>
+                <div style={styles.modalEyebrow}>
+                  CONTACT LOCUM
+                </div>
+
+                <h2 style={styles.modalTitle}>
+                  Email {fullName(selectedLocum)}
+                </h2>
+
+                <p style={styles.modalEmail}>
+                  {selectedLocum.email}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeEmail}
+                style={styles.closeButton}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={sendEmail}>
+              <label style={styles.label}>
+                From
+              </label>
+
+              <div style={styles.readOnlyField}>
+                CareStaffing &lt;info@care-staffing.com&gt;
+              </div>
+
+              <label style={styles.label}>
+                Reply-to
+              </label>
+
+              <input
+                type="email"
+                value={employerEmail}
+                onChange={(event) =>
+                  setEmployerEmail(event.target.value)
+                }
+                placeholder="Your employer email"
+                style={styles.modalInput}
+              />
+
+              <label style={styles.label}>
+                Subject
+              </label>
+
+              <input
+                value={subject}
+                onChange={(event) =>
+                  setSubject(event.target.value)
+                }
+                style={styles.modalInput}
+                required
+              />
+
+              <label style={styles.label}>
+                Message
+              </label>
+
+              <textarea
+                value={message}
+                onChange={(event) =>
+                  setMessage(event.target.value)
+                }
+                rows={10}
+                style={styles.textarea}
+                required
+              />
+
+              {sendStatus && (
+                <div
+                  style={
+                    sendStatus
+                      .toLowerCase()
+                      .includes("successfully")
+                      ? styles.successMessage
+                      : styles.modalError
+                  }
+                >
+                  {sendStatus}
+                </div>
+              )}
+
+              <div style={styles.modalActions}>
+                <button
+                  type="button"
+                  onClick={closeEmail}
+                  disabled={sending}
+                  style={styles.cancelButton}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={sending}
+                  style={{
+                    ...styles.sendButton,
+                    opacity: sending ? 0.65 : 1,
+                  }}
+                >
+                  {sending ? "Sending..." : "Send Email"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </main>
+  );
+}
+
+function Detail({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div style={styles.detailRow}>
+      <span style={styles.detailLabel}>{label}</span>
+
+      <span style={styles.detailValue}>{value}</span>
+    </div>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
-    padding: "30px 24px 60px",
-    background: "#f7f9f8",
-    color: "#14241f",
+    background: "#f7faf8",
+    padding: "34px 18px 60px",
     fontFamily:
-      "Arial, Helvetica, sans-serif",
+      'Inter, Arial, Helvetica, sans-serif',
+    color: "#17251e",
   },
 
   container: {
-    maxWidth: "1400px",
+    maxWidth: 1450,
     margin: "0 auto",
   },
 
-  navigation: {
+  topRow: {
     display: "flex",
     justifyContent: "space-between",
+    gap: 20,
     alignItems: "center",
-    gap: "20px",
-    flexWrap: "wrap",
-    marginBottom: "28px",
+    marginBottom: 28,
   },
 
-  brand: {
-    fontSize: "23px",
-    fontWeight: 900,
-    letterSpacing: "3px",
-    color: "#0f6154",
+  eyebrow: {
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 1.5,
+    color: "#057a55",
+    marginBottom: 5,
   },
 
-  navLinks: {
-    display: "flex",
-    alignItems: "center",
-    gap: "18px",
-    flexWrap: "wrap",
-  },
-
-  navLink: {
-    color: "#3c4743",
-    fontSize: "14px",
-    fontWeight: 700,
-    textDecoration: "none",
-  },
-
-  activeNavLink: {
-    color: "#087f5b",
-    fontSize: "14px",
-    fontWeight: 900,
-    textDecoration: "none",
-  },
-
-  hero: {
-    padding: "38px 40px",
-    borderRadius: "22px",
-    marginBottom: "24px",
-    background:
-      "linear-gradient(110deg, #071624 0%, #07383b 55%, #005642 100%)",
-    color: "white",
-    boxShadow:
-      "0 14px 40px rgba(4, 48, 40, 0.14)",
-  },
-
-  heroLabel: {
-    color: "#9ee8d4",
-    fontSize: "14px",
-    fontWeight: 900,
-    letterSpacing: "2px",
-    marginBottom: "10px",
-  },
-
-  heroTitle: {
-    fontSize: "46px",
-    lineHeight: 1,
-    margin: "0 0 16px",
-    fontWeight: 900,
-  },
-
-  heroText: {
+  title: {
     margin: 0,
-    color: "#e2efeb",
-    fontSize: "17px",
-    lineHeight: 1.6,
-    maxWidth: "720px",
+    fontSize: 34,
+    fontWeight: 800,
   },
 
-  statsGrid: {
+  subtitle: {
+    color: "#67746d",
+    marginTop: 8,
+    marginBottom: 0,
+  },
+
+  refreshButton: {
+    border: "1px solid #d5dfd9",
+    background: "#fff",
+    borderRadius: 10,
+    padding: "11px 18px",
+    cursor: "pointer",
+    fontWeight: 700,
+  },
+
+  filters: {
     display: "grid",
     gridTemplateColumns:
-      "repeat(auto-fit, minmax(200px, 1fr))",
-    gap: "16px",
-    marginBottom: "20px",
-  },
-
-  statCard: {
-    background: "#ffffff",
-    borderRadius: "16px",
-    padding: "20px",
-    border: "1px solid #e0e8e5",
-    boxShadow:
-      "0 7px 22px rgba(10, 50, 38, 0.04)",
-    display: "flex",
-    flexDirection: "column",
-    gap: "6px",
-  },
-
-  statLabel: {
-    fontSize: "12px",
-    color: "#77837f",
-    fontWeight: 800,
-    textTransform: "uppercase",
-  },
-
-  statNumber: {
-    fontSize: "31px",
-    color: "#087f5b",
-  },
-
-  statText: {
-    color: "#7c8984",
-    fontSize: "13px",
-  },
-
-  filterPanel: {
-    background: "#ffffff",
-    border: "1px solid #dfe8e5",
-    borderRadius: "18px",
-    padding: "22px",
-    marginBottom: "30px",
-    boxShadow:
-      "0 8px 25px rgba(14, 54, 42, 0.05)",
-  },
-
-  searchRow: {
-    display: "flex",
-    gap: "12px",
-    flexWrap: "wrap",
-    marginBottom: "18px",
+      "minmax(260px, 1.6fr) repeat(3, minmax(170px, 1fr))",
+    gap: 14,
+    marginBottom: 34,
   },
 
   searchInput: {
-    flex: "1 1 500px",
-    minHeight: "50px",
+    width: "100%",
+    height: 48,
     padding: "0 16px",
-    borderRadius: "11px",
-    border: "1px solid #d4dfdb",
-    fontSize: "15px",
-    outline: "none",
-  },
-
-  clearButton: {
-    minHeight: "50px",
-    padding: "0 20px",
-    borderRadius: "11px",
-    border: "1px solid #d4dfdb",
-    background: "#ffffff",
-    color: "#34433e",
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-
-  filterGrid: {
-    display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(190px, 1fr))",
-    gap: "15px",
-  },
-
-  filterGroup: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "7px",
-  },
-
-  filterLabel: {
-    color: "#596862",
-    fontSize: "12px",
-    fontWeight: 900,
+    borderRadius: 10,
+    border: "1px solid #d8e0dc",
+    fontSize: 15,
+    background: "#fff",
+    boxSizing: "border-box",
   },
 
   select: {
-    minHeight: "46px",
-    padding: "0 12px",
-    borderRadius: "10px",
-    border: "1px solid #d4dfdb",
-    background: "#ffffff",
-    color: "#172a23",
-    fontSize: "14px",
+    height: 48,
+    padding: "0 14px",
+    borderRadius: 10,
+    border: "1px solid #d8e0dc",
+    background: "#fff",
+    fontSize: 15,
   },
 
-  resultsHeader: {
-    marginBottom: "16px",
+  headingRow: {
+    marginBottom: 22,
   },
 
-  resultsTitle: {
+  sectionTitle: {
     margin: 0,
-    fontSize: "23px",
-    fontWeight: 900,
+    fontSize: 27,
+    fontWeight: 800,
   },
 
-  resultsSubtitle: {
+  resultCount: {
     margin: "5px 0 0",
-    color: "#7a8782",
-    fontSize: "14px",
+    color: "#69756f",
   },
 
-  cardGrid: {
+  grid: {
     display: "grid",
     gridTemplateColumns:
-      "repeat(auto-fill, minmax(340px, 1fr))",
-    gap: "18px",
+      "repeat(auto-fit, minmax(370px, 1fr))",
+    gap: 18,
   },
 
   card: {
-    background: "#ffffff",
-    borderRadius: "18px",
-    border: "1px solid #dfe7e4",
-    padding: "21px",
-    boxShadow:
-      "0 8px 25px rgba(18, 57, 45, 0.055)",
+    background: "#fff",
+    border: "1px solid #e1e8e4",
+    borderRadius: 16,
+    padding: 24,
+    boxShadow: "0 5px 18px rgba(0,0,0,0.035)",
   },
 
-  cardHeader: {
+  profileTop: {
     display: "flex",
-    gap: "13px",
+    gap: 16,
+    marginBottom: 22,
     alignItems: "flex-start",
   },
 
   avatar: {
-    width: "52px",
-    height: "52px",
-    minWidth: "52px",
+    width: 62,
+    height: 62,
     borderRadius: "50%",
+    background: "#dff1e8",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    background: "#dcf6ec",
-    border: "1px solid #c0e8da",
-    color: "#087f5b",
-    fontWeight: 900,
+    fontWeight: 800,
+    fontSize: 18,
+    color: "#075c40",
+    flexShrink: 0,
+  },
+
+  avatarImage: {
+    width: 62,
+    height: 62,
+    borderRadius: "50%",
+    objectFit: "cover",
+    flexShrink: 0,
+  },
+
+  nameArea: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  nameRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 10,
   },
 
   name: {
-    margin: "2px 0 8px",
-    fontSize: "19px",
-    lineHeight: 1.2,
+    margin: 0,
+    fontSize: 20,
+    fontWeight: 800,
   },
 
-  badgeRow: {
-    display: "flex",
-    gap: "6px",
-    flexWrap: "wrap",
+  profession: {
+    marginTop: 6,
+    color: "#087351",
+    fontWeight: 700,
   },
 
-  professionBadge: {
+  statusBadge: {
     padding: "5px 9px",
-    borderRadius: "999px",
-    background: "#edf8f4",
-    color: "#087f5b",
-    fontSize: "11px",
-    fontWeight: 900,
-  },
-
-  permitBadge: {
-    padding: "5px 9px",
-    borderRadius: "999px",
-    background: "#f1edff",
-    color: "#6741d9",
-    fontSize: "11px",
-    fontWeight: 900,
+    borderRadius: 100,
+    fontSize: 10,
+    fontWeight: 800,
+    whiteSpace: "nowrap",
   },
 
   availableBadge: {
-    padding: "5px 8px",
-    background: "#e9f8ed",
-    color: "#2b8a3e",
-    borderRadius: "999px",
-    fontSize: "9px",
-    fontWeight: 900,
+    background: "#e5f8ed",
+    color: "#18864c",
   },
 
   unavailableBadge: {
-    padding: "5px 8px",
-    background: "#f1f3f5",
-    color: "#868e96",
-    borderRadius: "999px",
-    fontSize: "9px",
-    fontWeight: 900,
-  },
-
-  divider: {
-    height: "1px",
-    background: "#edf1ef",
-    margin: "17px 0",
+    background: "#f1f1f1",
+    color: "#777",
   },
 
   details: {
     display: "flex",
     flexDirection: "column",
-    gap: "11px",
-    minHeight: "140px",
+    gap: 11,
+    marginBottom: 24,
   },
 
   detailRow: {
     display: "grid",
-    gridTemplateColumns: "105px 1fr",
-    gap: "10px",
+    gridTemplateColumns: "128px 1fr",
+    gap: 12,
+    fontSize: 14,
   },
 
   detailLabel: {
-    color: "#85908c",
-    fontSize: "12px",
     fontWeight: 700,
+    color: "#69746f",
   },
 
   detailValue: {
-    color: "#293b34",
-    fontSize: "13px",
-    lineHeight: 1.4,
+    color: "#28342e",
+    overflowWrap: "anywhere",
   },
 
   actions: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
-    gap: "10px",
-    marginTop: "20px",
+    gap: 12,
   },
 
-  primaryAction: {
-    minHeight: "43px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: "10px",
-    textDecoration: "none",
-    background: "#087f5b",
-    color: "#ffffff",
-    fontWeight: 900,
-    fontSize: "13px",
-  },
-
-  secondaryAction: {
-    minHeight: "43px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: "10px",
-    textDecoration: "none",
-    background: "#eef9f5",
-    color: "#087f5b",
-    border: "1px solid #cae8dd",
-    fontWeight: 900,
-    fontSize: "13px",
-  },
-
-  disabledAction: {
-    minHeight: "43px",
-    borderRadius: "10px",
-    border: "1px solid #e1e5e3",
-    background: "#f5f6f6",
-    color: "#a2aaa7",
+  callButton: {
+    minHeight: 46,
+    borderRadius: 9,
+    border: "1px solid #d8e0dc",
+    background: "#fff",
+    color: "#075c40",
     fontWeight: 800,
-  },
-
-  emptyCard: {
-    padding: "60px 20px",
-    textAlign: "center",
-    borderRadius: "18px",
-    border: "1px solid #dfe7e4",
-    background: "#ffffff",
-  },
-
-  emptyTitle: {
-    margin: "0 0 8px",
-    fontSize: "21px",
-  },
-
-  emptyText: {
-    margin: "0 0 20px",
-    color: "#798681",
-  },
-
-  primaryButton: {
-    minHeight: "44px",
-    padding: "0 20px",
-    borderRadius: "10px",
-    border: "none",
-    background: "#087f5b",
-    color: "#ffffff",
-    fontWeight: 900,
     cursor: "pointer",
   },
 
-  errorBox: {
-    marginBottom: "20px",
-    padding: "15px",
-    borderRadius: "10px",
-    border: "1px solid #ffc9c9",
-    background: "#fff5f5",
-    color: "#c92a2a",
-    fontWeight: 700,
+  emailButton: {
+    minHeight: 46,
+    borderRadius: 9,
+    border: "none",
+    background: "#087153",
+    color: "#fff",
+    fontWeight: 800,
+    cursor: "pointer",
   },
 
-  loadingPage: {
-    minHeight: "100vh",
+  messageBox: {
+    padding: 30,
+    background: "#fff",
+    border: "1px solid #e0e7e3",
+    borderRadius: 14,
+    textAlign: "center",
+  },
+
+  errorBox: {
+    padding: 18,
+    borderRadius: 10,
+    background: "#fff2f2",
+    border: "1px solid #f3caca",
+    color: "#a22e2e",
+  },
+
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(10,20,15,0.55)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    background: "#f7f9f8",
-    fontFamily: "Arial, sans-serif",
+    padding: 20,
+    zIndex: 9999,
   },
 
-  loadingCard: {
-    padding: "30px",
-    borderRadius: "15px",
-    background: "#ffffff",
-    border: "1px solid #dfe7e4",
+  modal: {
+    background: "#fff",
+    width: "100%",
+    maxWidth: 650,
+    maxHeight: "92vh",
+    overflowY: "auto",
+    borderRadius: 18,
+    padding: 28,
+    boxShadow: "0 30px 70px rgba(0,0,0,0.25)",
+  },
+
+  modalHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 20,
+    marginBottom: 24,
+  },
+
+  modalEyebrow: {
+    color: "#087153",
+    fontWeight: 800,
+    fontSize: 11,
+    letterSpacing: 1.4,
+  },
+
+  modalTitle: {
+    margin: "6px 0 4px",
+    fontSize: 24,
+  },
+
+  modalEmail: {
+    margin: 0,
+    color: "#69756f",
+    fontSize: 14,
+  },
+
+  closeButton: {
+    width: 38,
+    height: 38,
+    borderRadius: "50%",
+    border: "1px solid #ddd",
+    background: "#fff",
+    fontSize: 25,
+    cursor: "pointer",
+  },
+
+  label: {
+    display: "block",
+    marginBottom: 7,
+    marginTop: 16,
+    fontSize: 13,
+    fontWeight: 800,
+  },
+
+  readOnlyField: {
+    border: "1px solid #dce4e0",
+    background: "#f5f8f6",
+    padding: "13px 14px",
+    borderRadius: 9,
+    color: "#526159",
+  },
+
+  modalInput: {
+    width: "100%",
+    boxSizing: "border-box",
+    border: "1px solid #d6dfda",
+    borderRadius: 9,
+    padding: "13px 14px",
+    fontSize: 15,
+  },
+
+  textarea: {
+    width: "100%",
+    boxSizing: "border-box",
+    resize: "vertical",
+    minHeight: 190,
+    border: "1px solid #d6dfda",
+    borderRadius: 9,
+    padding: 14,
+    fontSize: 15,
+    fontFamily: "inherit",
+    lineHeight: 1.5,
+  },
+
+  modalActions: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: 12,
+    marginTop: 24,
+  },
+
+  cancelButton: {
+    padding: "12px 18px",
+    borderRadius: 9,
+    border: "1px solid #d3ddd7",
+    background: "#fff",
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+
+  sendButton: {
+    padding: "12px 22px",
+    borderRadius: 9,
+    border: "none",
+    background: "#087153",
+    color: "#fff",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+
+  successMessage: {
+    marginTop: 16,
+    padding: 12,
+    borderRadius: 8,
+    background: "#e9f8ee",
+    color: "#167844",
+    fontWeight: 700,
+  },
+
+  modalError: {
+    marginTop: 16,
+    padding: 12,
+    borderRadius: 8,
+    background: "#fff0f0",
+    color: "#a22e2e",
+    fontWeight: 700,
   },
 };
