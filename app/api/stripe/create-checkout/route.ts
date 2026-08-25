@@ -5,158 +5,87 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/*
- * ============================================================
- * ENVIRONMENT
- * ============================================================
- */
-
-const stripeSecretKey =
-  (process.env.STRIPE_SECRET_KEY || "")
+function cleanEnv(value?: string) {
+  return (value || "")
     .trim()
-    .replace(/[\r\n]/g, "");
+    .replace(/[\r\n\t]/g, "");
+}
 
-const supabaseUrl =
-  (process.env.NEXT_PUBLIC_SUPABASE_URL || "")
-    .trim();
+const stripeSecretKey = cleanEnv(process.env.STRIPE_SECRET_KEY);
+const supabaseUrl = cleanEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
+const supabaseServiceRoleKey = cleanEnv(
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-const supabaseServiceRoleKey =
-  (process.env.SUPABASE_SERVICE_ROLE_KEY || "")
-    .trim()
-    .replace(/[\r\n]/g, "");
+function getStripe() {
+  if (!stripeSecretKey) {
+    throw new Error("STRIPE_SECRET_KEY is missing.");
+  }
 
-const stripe = new Stripe(stripeSecretKey);
-
-/*
- * ============================================================
- * SUPABASE ADMIN
- * ============================================================
- */
+  return new Stripe(stripeSecretKey);
+}
 
 function getAdminSupabase() {
   if (!supabaseUrl) {
-    throw new Error(
-      "NEXT_PUBLIC_SUPABASE_URL is not configured."
-    );
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is missing.");
   }
 
   if (!supabaseServiceRoleKey) {
-    throw new Error(
-      "SUPABASE_SERVICE_ROLE_KEY is not configured."
-    );
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing.");
   }
 
-  return createClient(
-    supabaseUrl,
-    supabaseServiceRoleKey,
-    {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-        detectSessionInUrl: false,
-      },
-    }
-  );
+  return createClient(supabaseUrl, supabaseServiceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
 }
 
-/*
- * ============================================================
- * AUTHENTICATE EMPLOYER
- * ============================================================
- */
+async function getUser(req: NextRequest) {
+  const header = req.headers.get("authorization");
 
-async function getAuthenticatedUser(
-  req: NextRequest
-) {
-  const authorization =
-    req.headers.get("authorization");
-
-  if (!authorization) {
-    return {
-      user: null,
-      error:
-        "Authorization header was not received.",
-    };
+  if (!header?.startsWith("Bearer ")) {
+    throw new Error("AUTH_HEADER_MISSING");
   }
 
-  if (
-    !authorization.startsWith("Bearer ")
-  ) {
-    return {
-      user: null,
-      error:
-        "Authorization header is invalid.",
-    };
+  const token = header.substring(7).trim();
+
+  if (!token) {
+    throw new Error("AUTH_TOKEN_MISSING");
   }
 
-  const accessToken =
-    authorization
-      .slice("Bearer ".length)
-      .trim();
-
-  if (!accessToken) {
-    return {
-      user: null,
-      error:
-        "Authentication token was empty.",
-    };
-  }
-
-  const supabase =
-    getAdminSupabase();
+  const supabase = getAdminSupabase();
 
   const {
     data: { user },
     error,
-  } =
-    await supabase.auth.getUser(
-      accessToken
-    );
+  } = await supabase.auth.getUser(token);
 
-  if (error || !user) {
-    console.error(
-      "Employer authentication failed:",
-      error
-    );
-
-    return {
-      user: null,
-      error:
-        error?.message ||
-        "Supabase rejected the login token.",
-    };
+  if (error) {
+    console.error("Supabase auth error:", error);
+    throw new Error(`AUTH_FAILED: ${error.message}`);
   }
 
-  return {
-    user,
-    error: null,
-  };
+  if (!user) {
+    throw new Error("AUTH_FAILED: User not found.");
+  }
+
+  return user;
 }
 
-/*
- * ============================================================
- * BASE URL
- * ============================================================
- */
-
-function getBaseUrl(
-  req: NextRequest
-) {
+function getBaseUrl(req: NextRequest) {
   const configured =
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.APP_URL ||
-    process.env
-      .VERCEL_PROJECT_PRODUCTION_URL;
+    process.env.VERCEL_PROJECT_PRODUCTION_URL;
 
   if (configured) {
-    const clean =
-      configured
-        .trim()
-        .replace(/\/+$/, "");
+    const clean = configured.trim().replace(/\/+$/, "");
 
     if (
-      clean.startsWith("http://") ||
-      clean.startsWith("https://")
+      clean.startsWith("https://") ||
+      clean.startsWith("http://")
     ) {
       return clean;
     }
@@ -167,756 +96,480 @@ function getBaseUrl(
   return req.nextUrl.origin;
 }
 
-/*
- * ============================================================
- * MONEY
- * ============================================================
- */
+function getCurrency(shift: any) {
+  const value = String(shift?.currency || "ZAR")
+    .trim()
+    .toLowerCase();
 
-function toCents(
-  value: number
-) {
-  return Math.round(
-    value * 100
-  );
+  if (value === "zar") return "zar";
+  if (value === "gbp") return "gbp";
+  if (value === "nzd") return "nzd";
+  if (value === "eur") return "eur";
+
+  return "zar";
 }
 
-/*
- * ============================================================
- * CALCULATE APPROVED INVOICE
- * ============================================================
- */
-
-function calculateInvoiceTotal(
-  timesheet: any,
-  shift: any
-) {
-  const storedTotal =
-    Number(
-      timesheet.total_amount ||
-        0
-    );
+function calculateAmount(timesheet: any, shift: any) {
+  // First preference: amount already saved on timesheet
+  const storedTotal = Number(timesheet?.total_amount || 0);
 
   if (storedTotal > 0) {
     return storedTotal;
   }
 
-  const agreedRate =
-    Number(
-      timesheet.agreed_rate ||
-        0
-    );
+  // Second preference: approved/agreed rate x hours
+  const hours = Number(timesheet?.hours_worked || 0);
 
-  const hoursWorked =
-    Number(
-      timesheet.hours_worked ||
-        0
-    );
+  const agreedRate = Number(timesheet?.agreed_rate || 0);
 
-  if (
-    agreedRate > 0 &&
-    hoursWorked > 0
-  ) {
-    return (
-      agreedRate *
-      hoursWorked
-    );
+  if (hours > 0 && agreedRate > 0) {
+    return hours * agreedRate;
   }
 
-  const rate =
-    Number(
-      shift.locum_rate ||
-        shift.hourly_rate ||
-        0
-    );
+  // Third preference: shift hourly rate
+  const hourlyRate = Number(shift?.hourly_rate || 0);
 
-  const rateType =
-    String(
-      shift.rate_type ||
-        "hourly"
-    ).toLowerCase();
-
-  if (
-    rateType === "hourly" &&
-    hoursWorked > 0
-  ) {
-    return (
-      rate *
-      hoursWorked
-    );
+  if (hours > 0 && hourlyRate > 0) {
+    return hours * hourlyRate;
   }
 
-  return rate;
+  // Last fallback: shift/locum rate
+  const shiftRate = Number(
+    shift?.locum_rate ||
+      shift?.rate ||
+      0
+  );
+
+  if (shiftRate > 0) {
+    return shiftRate;
+  }
+
+  return 0;
 }
 
-/*
- * ============================================================
- * POST
- * ============================================================
- */
+export async function POST(req: NextRequest) {
+  let stage = "starting";
 
-export async function POST(
-  req: NextRequest
-) {
   try {
+    console.log("====================================");
+    console.log("CARESTAFFING SINGLE STRIPE CHECKOUT");
+    console.log("====================================");
+
     /*
-     * ENV CHECK
+     * --------------------------------------------------------
+     * 1. ENVIRONMENT
+     * --------------------------------------------------------
      */
+
+    stage = "environment";
+
+    console.log("Environment:", {
+      stripeConfigured: Boolean(stripeSecretKey),
+      stripePrefix: stripeSecretKey
+        ? stripeSecretKey.substring(0, 7)
+        : "missing",
+      supabaseUrlConfigured: Boolean(supabaseUrl),
+      serviceRoleConfigured: Boolean(supabaseServiceRoleKey),
+    });
 
     if (!stripeSecretKey) {
-      return NextResponse.json(
-        {
-          error:
-            "STRIPE_SECRET_KEY is not configured.",
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-
-    if (
-      !supabaseUrl ||
-      !supabaseServiceRoleKey
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "Supabase server environment variables are not configured.",
-        },
-        {
-          status: 500,
-        }
-      );
+      throw new Error("STRIPE_SECRET_KEY is not configured.");
     }
 
     /*
-     * AUTH
+     * --------------------------------------------------------
+     * 2. AUTHENTICATION
+     * --------------------------------------------------------
      */
 
-    const auth =
-      await getAuthenticatedUser(
-        req
-      );
+    stage = "authentication";
 
-    if (!auth.user) {
-      return NextResponse.json(
-        {
-          error:
-            "Unauthorised.",
+    const user = await getUser(req);
 
-          detail:
-            auth.error,
-        },
-        {
-          status: 401,
-        }
-      );
-    }
-
-    const user =
-      auth.user;
+    console.log("Authenticated employer:", {
+      id: user.id,
+      email: user.email,
+    });
 
     /*
-     * BODY
+     * --------------------------------------------------------
+     * 3. REQUEST BODY
+     * --------------------------------------------------------
      */
 
-    const body =
-      await req
-        .json()
-        .catch(() => ({}));
+    stage = "request_body";
 
-    const timesheetId =
-      String(
-        body?.timesheetId ||
-          body?.timesheet_id ||
-          ""
-      ).trim();
+    const body = await req.json().catch(() => ({}));
+
+    console.log("Checkout request body:", body);
+
+    const timesheetId = String(
+      body?.timesheetId ||
+        body?.timesheet_id ||
+        ""
+    ).trim();
 
     if (!timesheetId) {
-      return NextResponse.json(
-        {
-          error:
-            "timesheetId is required.",
-        },
-        {
-          status: 400,
-        }
-      );
+      throw new Error("timesheetId was not supplied.");
     }
 
-    const supabase =
-      getAdminSupabase();
+    console.log("Timesheet:", timesheetId);
+
+    const supabase = getAdminSupabase();
 
     /*
-     * LOAD TIMESHEET
+     * --------------------------------------------------------
+     * 4. LOAD TIMESHEET
+     * --------------------------------------------------------
      */
+
+    stage = "load_timesheet";
 
     const {
       data: timesheet,
       error: timesheetError,
-    } =
-      await supabase
-        .from("timesheets")
-        .select("*")
-        .eq(
-          "id",
-          timesheetId
-        )
-        .maybeSingle();
+    } = await supabase
+      .from("timesheets")
+      .select("*")
+      .eq("id", timesheetId)
+      .maybeSingle();
 
     if (timesheetError) {
-      throw timesheetError;
-    }
+      console.error("Timesheet query error:", timesheetError);
 
-    if (!timesheet) {
-      return NextResponse.json(
-        {
-          error:
-            "Timesheet not found.",
-        },
-        {
-          status: 404,
-        }
+      throw new Error(
+        `TIMESHEET_QUERY_FAILED: ${timesheetError.message}`
       );
     }
 
+    if (!timesheet) {
+      throw new Error("TIMESHEET_NOT_FOUND");
+    }
+
+    console.log("Timesheet loaded:", {
+      id: timesheet.id,
+      shift_id: timesheet.shift_id,
+      locum_id: timesheet.locum_id,
+      status: timesheet.status,
+      hours_worked: timesheet.hours_worked,
+      total_amount: timesheet.total_amount,
+      agreed_rate: timesheet.agreed_rate,
+    });
+
     /*
-     * APPROVED ONLY
+     * --------------------------------------------------------
+     * 5. CHECK STATUS
+     * --------------------------------------------------------
      */
 
-    if (
-      String(
-        timesheet.status ||
-          ""
-      ).toLowerCase() !==
-      "approved"
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "Only an approved timesheet can be paid.",
-        },
-        {
-          status: 400,
-        }
+    stage = "check_timesheet_status";
+
+    const status = String(timesheet.status || "")
+      .trim()
+      .toLowerCase();
+
+    if (status !== "approved") {
+      throw new Error(
+        `TIMESHEET_NOT_APPROVED: Current status is "${status}".`
       );
     }
 
     if (!timesheet.shift_id) {
-      return NextResponse.json(
-        {
-          error:
-            "Timesheet has no shift linked to it.",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
-
-    if (!timesheet.locum_id) {
-      return NextResponse.json(
-        {
-          error:
-            "Timesheet has no healthcare professional linked to it.",
-        },
-        {
-          status: 400,
-        }
-      );
+      throw new Error("TIMESHEET_HAS_NO_SHIFT_ID");
     }
 
     /*
-     * LOAD SHIFT
+     * --------------------------------------------------------
+     * 6. LOAD SHIFT
+     * --------------------------------------------------------
      */
+
+    stage = "load_shift";
 
     const {
       data: shift,
       error: shiftError,
-    } =
-      await supabase
-        .from("shifts")
-        .select("*")
-        .eq(
-          "id",
-          timesheet.shift_id
-        )
-        .maybeSingle();
+    } = await supabase
+      .from("shifts")
+      .select("*")
+      .eq("id", timesheet.shift_id)
+      .maybeSingle();
 
     if (shiftError) {
-      throw shiftError;
+      console.error("Shift query error:", shiftError);
+
+      throw new Error(
+        `SHIFT_QUERY_FAILED: ${shiftError.message}`
+      );
     }
 
     if (!shift) {
-      return NextResponse.json(
-        {
-          error:
-            "Shift not found.",
-        },
-        {
-          status: 404,
-        }
-      );
+      throw new Error("SHIFT_NOT_FOUND");
     }
 
+    console.log("Shift loaded:", {
+      id: shift.id,
+      title: shift.title,
+      created_by: shift.created_by,
+      company_id: shift.company_id,
+      hourly_rate: shift.hourly_rate,
+      locum_rate: shift.locum_rate,
+      currency: shift.currency,
+    });
+
     /*
-     * EMPLOYER AUTHORISATION
+     * --------------------------------------------------------
+     * 7. EMPLOYER AUTHORIZATION
+     * --------------------------------------------------------
      */
 
-    let employerAuthorised =
-      shift.created_by ===
-      user.id;
+    stage = "employer_authorization";
 
-    if (
-      !employerAuthorised &&
-      shift.company_id
-    ) {
+    let employerAuthorised =
+      shift.created_by === user.id;
+
+    if (!employerAuthorised && shift.company_id) {
       const {
         data: company,
         error: companyError,
-      } =
-        await supabase
-          .from("companies")
-          .select(
-            "id,owner_id"
-          )
-          .eq(
-            "id",
-            shift.company_id
-          )
-          .maybeSingle();
+      } = await supabase
+        .from("companies")
+        .select("*")
+        .eq("id", shift.company_id)
+        .maybeSingle();
 
       if (companyError) {
-        throw companyError;
+        console.error("Company query error:", companyError);
+
+        throw new Error(
+          `COMPANY_QUERY_FAILED: ${companyError.message}`
+        );
       }
 
-      employerAuthorised =
-        company?.owner_id ===
-        user.id;
+      console.log("Company:", {
+        id: company?.id,
+        owner_id: company?.owner_id,
+      });
+
+      if (company?.owner_id === user.id) {
+        employerAuthorised = true;
+      }
     }
 
     if (!employerAuthorised) {
-      return NextResponse.json(
-        {
-          error:
-            "You are not authorised to pay this invoice.",
-        },
-        {
-          status: 403,
-        }
+      throw new Error(
+        "EMPLOYER_NOT_AUTHORISED_FOR_SHIFT"
       );
     }
 
     /*
-     * ========================================================
-     * SINGLE PAYMENT MODEL
-     * ========================================================
+     * --------------------------------------------------------
+     * 8. AMOUNT
+     * --------------------------------------------------------
+     */
+
+    stage = "calculate_amount";
+
+    const amount = Number(
+      calculateAmount(timesheet, shift).toFixed(2)
+    );
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error(
+        `INVALID_PAYMENT_AMOUNT: ${amount}`
+      );
+    }
+
+    const amountCents = Math.round(amount * 100);
+
+    const platformFee = Number(
+      (amount * 0.1).toFixed(2)
+    );
+
+    const locumAmount = Number(
+      (amount - platformFee).toFixed(2)
+    );
+
+    const currency = getCurrency(shift);
+
+    console.log("Payment calculation:", {
+      amount,
+      amountCents,
+      platformFee,
+      locumAmount,
+      currency,
+    });
+
+    /*
+     * --------------------------------------------------------
+     * 9. CREATE STRIPE CHECKOUT
+     * --------------------------------------------------------
+     */
+
+    stage = "stripe_checkout";
+
+    const stripe = getStripe();
+
+    const baseUrl = getBaseUrl(req);
+
+    console.log("Creating normal Stripe Checkout...");
+
+    console.log("Base URL:", baseUrl);
+
+    /*
+     * IMPORTANT:
      *
-     * Employer pays full amount to CareStaffing.
-     * No Stripe Connect.
-     * No payout recipient setup.
+     * This is a STANDARD STRIPE PAYMENT.
+     *
+     * There is:
+     * - NO Stripe Connect
+     * - NO destination
+     * - NO transfer_data
+     * - NO application_fee_amount
+     * - NO locum Stripe account
      */
 
-    const invoiceTotal =
-      Number(
-        calculateInvoiceTotal(
-          timesheet,
-          shift
-        ).toFixed(2)
-      );
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
 
-    if (
-      !Number.isFinite(
-        invoiceTotal
-      ) ||
-      invoiceTotal <= 0
-    ) {
-      return NextResponse.json(
+      payment_method_types: ["card"],
+
+      line_items: [
         {
-          error:
-            "The approved timesheet has no payable amount.",
-        },
-        {
-          status: 400,
-        }
-      );
-    }
+          quantity: 1,
 
-    /*
-     * INTERNAL ACCOUNTING
-     */
+          price_data: {
+            currency,
 
-    const employerTotalCents =
-      toCents(
-        invoiceTotal
-      );
+            unit_amount: amountCents,
 
-    const platformFeeCents =
-      Math.round(
-        employerTotalCents *
-          0.1
-      );
+            product_data: {
+              name:
+                shift.title ||
+                "CareStaffing Shift Payment",
 
-    const professionalAmountCents =
-      employerTotalCents -
-      platformFeeCents;
-
-    const employerTotal =
-      employerTotalCents /
-      100;
-
-    const platformFee =
-      platformFeeCents /
-      100;
-
-    const professionalAmount =
-      professionalAmountCents /
-      100;
-
-    const currency =
-      String(
-        shift.currency ||
-          "ZAR"
-      ).toLowerCase();
-
-    /*
-     * EXISTING PAYMENT
-     */
-
-    const {
-      data: existingPayment,
-      error:
-        existingPaymentError,
-    } =
-      await supabase
-        .from("payments")
-        .select("*")
-        .eq(
-          "timesheet_id",
-          timesheet.id
-        )
-        .maybeSingle();
-
-    if (
-      existingPaymentError
-    ) {
-      throw existingPaymentError;
-    }
-
-    if (
-      existingPayment &&
-      [
-        "paid",
-        "succeeded",
-      ].includes(
-        String(
-          existingPayment
-            .payment_status ||
-            ""
-        ).toLowerCase()
-      )
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "This invoice has already been paid.",
-
-          paymentId:
-            existingPayment.id,
-        },
-        {
-          status: 409,
-        }
-      );
-    }
-
-    /*
-     * URLS
-     */
-
-    const baseUrl =
-      getBaseUrl(req);
-
-    const successUrl =
-      `${baseUrl}/employer/shifts` +
-      `?payment=success` +
-      `&session_id={CHECKOUT_SESSION_ID}`;
-
-    const cancelUrl =
-      `${baseUrl}/employer/payments` +
-      `?timesheet=${encodeURIComponent(
-        timesheet.id
-      )}` +
-      `&payment=cancelled`;
-
-    /*
-     * ========================================================
-     * NORMAL STRIPE CHECKOUT
-     * ========================================================
-     */
-
-    const session =
-      await stripe.checkout.sessions.create({
-        mode: "payment",
-
-        success_url:
-          successUrl,
-
-        cancel_url:
-          cancelUrl,
-
-        customer_email:
-          user.email ||
-          undefined,
-
-        line_items: [
-          {
-            quantity: 1,
-
-            price_data: {
-              currency,
-
-              unit_amount:
-                employerTotalCents,
-
-              product_data: {
-                name:
-                  shift.title ||
-                  "CareStaffing healthcare shift",
-
-                description:
-                  `Approved CareStaffing timesheet • ` +
-                  `${Number(
-                    timesheet.hours_worked ||
-                      0
-                  ).toFixed(
-                    2
-                  )} hours`,
-              },
+              description:
+                "Approved CareStaffing invoice",
             },
           },
-        ],
-
-        /*
-         * IMPORTANT:
-         *
-         * No transfer_data.
-         * No application_fee_amount.
-         */
-        payment_intent_data: {
-          metadata: {
-            carestaffing:
-              "true",
-
-            payment_model:
-              "single_platform_payment",
-
-            timesheet_id:
-              timesheet.id,
-
-            shift_id:
-              timesheet.shift_id,
-
-            professional_id:
-              timesheet.locum_id,
-
-            employer_id:
-              user.id,
-          },
         },
+      ],
 
-        metadata: {
-          carestaffing:
-            "true",
+      customer_email: user.email || undefined,
 
-          payment_model:
-            "single_platform_payment",
+      metadata: {
+        platform: "carestaffing",
+        payment_model: "single_payment",
 
-          timesheet_id:
-            timesheet.id,
+        timesheet_id: String(timesheet.id),
 
-          shift_id:
-            timesheet.shift_id,
+        shift_id: String(timesheet.shift_id),
 
-          professional_id:
-            timesheet.locum_id,
+        employer_id: String(user.id),
 
-          employer_id:
-            user.id,
+        locum_id: String(timesheet.locum_id || ""),
 
-          employer_total:
-            employerTotal.toFixed(
-              2
-            ),
+        gross_amount: amount.toFixed(2),
 
-          platform_fee:
-            platformFee.toFixed(
-              2
-            ),
+        platform_fee: platformFee.toFixed(2),
 
-          professional_amount:
-            professionalAmount.toFixed(
-              2
-            ),
-        },
-      });
+        locum_amount: locumAmount.toFixed(2),
+      },
 
-    /*
-     * SAVE PENDING PAYMENT
-     */
+      success_url:
+        `${baseUrl}/employer/payments` +
+        `?timesheet=${encodeURIComponent(timesheet.id)}` +
+        `&payment=success` +
+        `&session_id={CHECKOUT_SESSION_ID}`,
 
-    const paymentPayload =
-      {
-        timesheet_id:
-          timesheet.id,
+      cancel_url:
+        `${baseUrl}/employer/payments` +
+        `?timesheet=${encodeURIComponent(timesheet.id)}` +
+        `&payment=cancelled`,
+    });
 
-        shift_id:
-          timesheet.shift_id,
+    console.log("STRIPE CHECKOUT CREATED:", {
+      id: session.id,
+      urlAvailable: Boolean(session.url),
+      paymentStatus: session.payment_status,
+    });
 
-        employer_id:
-          user.id,
-
-        locum_id:
-          timesheet.locum_id,
-
-        gross_amount:
-          employerTotal,
-
-        employer_total:
-          employerTotal,
-
-        platform_fee:
-          platformFee,
-
-        locum_amount:
-          professionalAmount,
-
-        payment_status:
-          "pending",
-
-        payout_status:
-          "pending",
-
-        stripe_checkout_session_id:
-          session.id,
-
-        stripe_payment_intent_id:
-          typeof session.payment_intent ===
-          "string"
-            ? session.payment_intent
-            : null,
-
-        updated_at:
-          new Date().toISOString(),
-      };
-
-    let paymentId:
-      | string
-      | null = null;
-
-    /*
-     * UPDATE OR INSERT PAYMENT
-     */
-
-    if (existingPayment) {
-      const {
-        data:
-          updatedPayment,
-        error:
-          updatePaymentError,
-      } =
-        await supabase
-          .from("payments")
-          .update(
-            paymentPayload
-          )
-          .eq(
-            "id",
-            existingPayment.id
-          )
-          .select("id")
-          .single();
-
-      if (
-        updatePaymentError
-      ) {
-        throw updatePaymentError;
-      }
-
-      paymentId =
-        updatedPayment.id;
-    } else {
-      const {
-        data:
-          insertedPayment,
-        error:
-          insertPaymentError,
-      } =
-        await supabase
-          .from("payments")
-          .insert(
-            paymentPayload
-          )
-          .select("id")
-          .single();
-
-      if (
-        insertPaymentError
-      ) {
-        throw insertPaymentError;
-      }
-
-      paymentId =
-        insertedPayment.id;
+    if (!session.url) {
+      throw new Error(
+        "Stripe created the session but returned no checkout URL."
+      );
     }
 
     /*
+     * --------------------------------------------------------
      * SUCCESS
+     * --------------------------------------------------------
      */
 
+    return NextResponse.json({
+      success: true,
+
+      paymentModel: "single_payment",
+
+      checkoutSessionId: session.id,
+
+      url: session.url,
+
+      amounts: {
+        employerPays: amount,
+        platformFee,
+        locumAmount,
+        currency: currency.toUpperCase(),
+      },
+    });
+  } catch (error: any) {
+    /*
+     * --------------------------------------------------------
+     * DETAILED ERROR
+     * --------------------------------------------------------
+     */
+
+    console.error("====================================");
+    console.error("STRIPE CHECKOUT FAILURE");
+    console.error("Stage:", stage);
+    console.error("Error:", error);
+    console.error("====================================");
+
+    const message =
+      error?.message ||
+      "Could not create Stripe Checkout session.";
+
+    const stripeType =
+      error?.type ||
+      null;
+
+    const stripeCode =
+      error?.code ||
+      null;
+
+    const stripeParam =
+      error?.param ||
+      null;
+
     return NextResponse.json(
       {
-        success: true,
+        success: false,
 
-        paymentModel:
-          "single_platform_payment",
+        error: message,
 
-        paymentId,
+        stage,
 
-        checkoutSessionId:
-          session.id,
-
-        url:
-          session.url,
-
-        amounts: {
-          employerTotal,
-
-          platformFee,
-
-          professionalAmount,
-
-          currency:
-            currency.toUpperCase(),
+        stripe: {
+          type: stripeType,
+          code: stripeCode,
+          param: stripeParam,
         },
-      }
-    );
-  } catch (error) {
-    console.error(
-      "CareStaffing Stripe Checkout error:",
-      error
-    );
-
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Could not create Stripe Checkout session.",
       },
       {
-        status: 500,
+        status:
+          message.includes("AUTH_")
+            ? 401
+            : 500,
       }
     );
   }
