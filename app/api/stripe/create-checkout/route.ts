@@ -430,12 +430,14 @@ export async function POST(req: NextRequest) {
      */
 
     const session = await stripe.checkout.sessions.create({
-      mode: "payment",
+  mode: "payment",
 
-      payment_method_types: ["card"],
+  payment_method_types: ["card"],
 
-      line_items: [
-        {
+  // Allows employer to enter CAREPON or another promo code
+  allow_promotion_codes: true,
+
+  line_items: [
           quantity: 1,
 
           price_data: {
