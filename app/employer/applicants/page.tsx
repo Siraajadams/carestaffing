@@ -76,6 +76,17 @@ function ApplicantsContent() {
   const [updatingId, setUpdatingId] =
     useState<string | null>(null);
 
+  // Applicant email modal
+  const [emailApplicant, setEmailApplicant] =
+    useState<ApplicantProfile | null>(null);
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailMessage, setEmailMessage] = useState("");
+  const [employerEmail, setEmployerEmail] = useState("");
+  const [employerName, setEmployerName] =
+    useState("CareStaffing Employer");
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [emailStatus, setEmailStatus] = useState("");
+
   useEffect(() => {
     void loadApplications();
   }, [shiftFilter]);
@@ -155,6 +166,54 @@ function ApplicantsContent() {
       if (userError || !user) {
         router.replace("/login");
         return;
+      }
+
+      setEmployerEmail(user.email || "");
+
+      // Load employer/company name for the email signature.
+      try {
+        const { data: employerProfile } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        const profileName =
+          employerProfile?.organisation_name ||
+          employerProfile?.company_name ||
+          [
+            employerProfile?.first_name,
+            employerProfile?.surname,
+          ]
+            .filter(Boolean)
+            .join(" ");
+
+        if (profileName) {
+          setEmployerName(profileName);
+        }
+
+        if (employerProfile?.email) {
+          setEmployerEmail(employerProfile.email);
+        }
+
+        const { data: company } = await supabase
+          .from("companies")
+          .select("*")
+          .eq("owner_id", user.id)
+          .maybeSingle();
+
+        if (company?.business_name) {
+          setEmployerName(company.business_name);
+        }
+
+        if (company?.email) {
+          setEmployerEmail(company.email);
+        }
+      } catch (employerLookupError) {
+        console.warn(
+          "Employer email identity lookup warning:",
+          employerLookupError,
+        );
       }
 
       // -------------------------------------------------------
@@ -526,6 +585,146 @@ function ApplicantsContent() {
       );
     } finally {
       setUpdatingId(null);
+    }
+  }
+
+
+  // =========================================================
+  // APPLICANT EMAIL
+  // =========================================================
+
+  function applicantFullName(applicant: ApplicantProfile) {
+    return (
+      [applicant.first_name, applicant.surname]
+        .filter(Boolean)
+        .join(" ")
+        .trim() || "Healthcare Professional"
+    );
+  }
+
+  function openApplicantEmail(
+    applicant: ApplicantProfile,
+    shift?: Shift | null,
+  ) {
+    if (!applicant.email) {
+      setMessageType("error");
+      setMessage("This applicant does not have an email address.");
+      return;
+    }
+
+    const name = applicantFullName(applicant);
+    const firstName =
+      applicant.first_name?.trim() || "Healthcare Professional";
+
+    setEmailApplicant(applicant);
+    setEmailSubject(
+      shift?.title
+        ? `CareStaffing: ${shift.title}`
+        : `CareStaffing opportunity for ${name}`,
+    );
+
+    setEmailMessage(
+      `Dear ${firstName},\n\n` +
+        `Thank you for your application through CareStaffing.` +
+        (shift?.title
+          ? ` We are contacting you regarding your application for ${shift.title}.`
+          : "") +
+        `\n\nPlease reply to this email if you require any further information.\n\n` +
+        `Kind regards,\n${employerName || "CareStaffing Employer"}`,
+    );
+
+    setEmailStatus("");
+  }
+
+  function closeApplicantEmail() {
+    if (sendingEmail) return;
+
+    setEmailApplicant(null);
+    setEmailSubject("");
+    setEmailMessage("");
+    setEmailStatus("");
+  }
+
+  async function sendApplicantEmail(
+    event: React.FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+
+    if (!emailApplicant?.email) {
+      setEmailStatus("Applicant email address is missing.");
+      return;
+    }
+
+    if (!emailSubject.trim()) {
+      setEmailStatus("Please enter an email subject.");
+      return;
+    }
+
+    if (!emailMessage.trim()) {
+      setEmailStatus("Please enter an email message.");
+      return;
+    }
+
+    try {
+      setSendingEmail(true);
+      setEmailStatus("");
+
+      const response = await fetch("/api/locum-email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          to: emailApplicant.email,
+          locumName: applicantFullName(emailApplicant),
+          subject: emailSubject.trim(),
+          message: emailMessage.trim(),
+          employerName:
+            employerName.trim() || "CareStaffing Employer",
+          employerEmail: employerEmail.trim(),
+        }),
+      });
+
+      const raw = await response.text();
+
+      let result: any = {};
+
+      try {
+        result = raw ? JSON.parse(raw) : {};
+      } catch {
+        result = {
+          success: false,
+          error: raw || "The email service returned an invalid response.",
+        };
+      }
+
+      if (!response.ok || !result.success) {
+        throw new Error(
+          result?.error ||
+            `Unable to send email. HTTP ${response.status}`,
+        );
+      }
+
+      setEmailStatus(
+        `Email successfully sent to ${applicantFullName(
+          emailApplicant,
+        )}.`,
+      );
+
+      setTimeout(() => {
+        setEmailApplicant(null);
+        setEmailSubject("");
+        setEmailMessage("");
+        setEmailStatus("");
+      }, 1800);
+    } catch (error: any) {
+      console.error("Applicant email error:", error);
+
+      setEmailStatus(
+        error?.message || "Unable to send applicant email.",
+      );
+    } finally {
+      setSendingEmail(false);
     }
   }
 
@@ -1018,14 +1217,20 @@ function ApplicantsContent() {
                       )}
 
                       {applicant?.email && (
-                        <a
-                          href={`mailto:${applicant.email}`}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openApplicantEmail(
+                              applicant,
+                              shift,
+                            )
+                          }
                           style={
                             styles.secondaryButton
                           }
                         >
                           ✉️ Email
-                        </a>
+                        </button>
                       )}
 
                       {applicant?.mobile && (
@@ -1162,6 +1367,119 @@ function ApplicantsContent() {
           </div>
         )}
       </div>
+
+      {emailApplicant && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.emailModal}>
+            <div style={styles.modalHeader}>
+              <div>
+                <p style={styles.modalEyebrow}>
+                  CONTACT APPLICANT
+                </p>
+
+                <h2 style={styles.modalTitle}>
+                  Email {applicantFullName(emailApplicant)}
+                </h2>
+
+                <p style={styles.modalRecipient}>
+                  {emailApplicant.email}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeApplicantEmail}
+                disabled={sendingEmail}
+                style={styles.closeButton}
+                aria-label="Close email"
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={sendApplicantEmail}>
+              <label style={styles.emailLabel}>From</label>
+
+              <div style={styles.readOnlyField}>
+                CareStaffing &lt;info@care-staffing.com&gt;
+              </div>
+
+              <label style={styles.emailLabel}>Reply-to</label>
+
+              <input
+                type="email"
+                value={employerEmail}
+                onChange={(event) =>
+                  setEmployerEmail(event.target.value)
+                }
+                placeholder="Employer email address"
+                style={styles.emailInput}
+              />
+
+              <label style={styles.emailLabel}>Subject</label>
+
+              <input
+                value={emailSubject}
+                onChange={(event) =>
+                  setEmailSubject(event.target.value)
+                }
+                style={styles.emailInput}
+                required
+              />
+
+              <label style={styles.emailLabel}>Message</label>
+
+              <textarea
+                value={emailMessage}
+                onChange={(event) =>
+                  setEmailMessage(event.target.value)
+                }
+                rows={10}
+                style={styles.emailTextarea}
+                required
+              />
+
+              {emailStatus && (
+                <div
+                  style={
+                    emailStatus
+                      .toLowerCase()
+                      .includes("successfully")
+                      ? styles.emailSuccess
+                      : styles.emailError
+                  }
+                >
+                  {emailStatus}
+                </div>
+              )}
+
+              <div style={styles.modalActions}>
+                <button
+                  type="button"
+                  onClick={closeApplicantEmail}
+                  disabled={sendingEmail}
+                  style={styles.modalCancelButton}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={sendingEmail}
+                  style={{
+                    ...styles.modalSendButton,
+                    opacity: sendingEmail ? 0.6 : 1,
+                  }}
+                >
+                  {sendingEmail
+                    ? "Sending..."
+                    : "Send Email"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -1477,6 +1795,8 @@ const styles: Record<
     textDecoration: "none",
     fontWeight: 800,
     cursor: "pointer",
+    fontFamily: "inherit",
+    fontSize: 14,
   },
 
   acceptButton: {
@@ -1497,6 +1817,158 @@ const styles: Record<
     border: "1px solid #fecaca",
     fontWeight: 900,
     cursor: "pointer",
+  },
+
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    zIndex: 9999,
+    background: "rgba(15,23,42,0.58)",
+    display: "grid",
+    placeItems: "center",
+    padding: 20,
+  },
+
+  emailModal: {
+    width: "100%",
+    maxWidth: 650,
+    maxHeight: "92vh",
+    overflowY: "auto",
+    background: "#ffffff",
+    borderRadius: 20,
+    padding: 28,
+    boxShadow: "0 30px 80px rgba(15,23,42,0.28)",
+  },
+
+  modalHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 18,
+    marginBottom: 20,
+  },
+
+  modalEyebrow: {
+    margin: 0,
+    color: "#0f766e",
+    fontWeight: 900,
+    letterSpacing: 1,
+    fontSize: 12,
+  },
+
+  modalTitle: {
+    margin: "6px 0 4px",
+    color: "#0f172a",
+    fontSize: 24,
+  },
+
+  modalRecipient: {
+    margin: 0,
+    color: "#64748b",
+    fontSize: 14,
+    wordBreak: "break-word",
+  },
+
+  closeButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 999,
+    border: "1px solid #cbd5e1",
+    background: "#ffffff",
+    color: "#334155",
+    fontSize: 24,
+    cursor: "pointer",
+  },
+
+  emailLabel: {
+    display: "block",
+    marginTop: 15,
+    marginBottom: 7,
+    color: "#334155",
+    fontWeight: 800,
+    fontSize: 13,
+  },
+
+  readOnlyField: {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "12px 14px",
+    borderRadius: 10,
+    border: "1px solid #dbe3e0",
+    background: "#f8fafc",
+    color: "#475569",
+  },
+
+  emailInput: {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "12px 14px",
+    borderRadius: 10,
+    border: "1px solid #cbd5e1",
+    background: "#ffffff",
+    fontSize: 15,
+  },
+
+  emailTextarea: {
+    width: "100%",
+    minHeight: 190,
+    boxSizing: "border-box",
+    padding: 14,
+    borderRadius: 10,
+    border: "1px solid #cbd5e1",
+    background: "#ffffff",
+    fontSize: 15,
+    lineHeight: 1.5,
+    fontFamily: "inherit",
+    resize: "vertical",
+  },
+
+  modalActions: {
+    marginTop: 22,
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+
+  modalCancelButton: {
+    padding: "11px 16px",
+    borderRadius: 10,
+    border: "1px solid #cbd5e1",
+    background: "#ffffff",
+    color: "#334155",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+
+  modalSendButton: {
+    padding: "11px 18px",
+    borderRadius: 10,
+    border: "none",
+    background: "#0f766e",
+    color: "#ffffff",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+
+  emailSuccess: {
+    marginTop: 15,
+    padding: 12,
+    borderRadius: 10,
+    background: "#dcfce7",
+    color: "#166534",
+    border: "1px solid #bbf7d0",
+    fontWeight: 700,
+  },
+
+  emailError: {
+    marginTop: 15,
+    padding: 12,
+    borderRadius: 10,
+    background: "#fee2e2",
+    color: "#991b1b",
+    border: "1px solid #fecaca",
+    fontWeight: 700,
   },
 
   emptyCard: {
