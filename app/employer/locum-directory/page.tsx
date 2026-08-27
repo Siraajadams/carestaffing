@@ -182,9 +182,6 @@ export default function LocumDirectoryPage() {
   const [employerName, setEmployerName] =
     useState("CareStaffing Employer");
 
-  const [employerEmail, setEmployerEmail] =
-    useState("");
-
   const [sending, setSending] = useState(false);
   const [sendStatus, setSendStatus] = useState("");
 
@@ -223,8 +220,6 @@ export default function LocumDirectoryPage() {
         return;
       }
 
-      setEmployerEmail(user.email || "");
-
       /*
        * -----------------------------------------------------
        * EMPLOYER DETAILS
@@ -251,10 +246,6 @@ export default function LocumDirectoryPage() {
           if (name) {
             setEmployerName(name);
           }
-
-          if (clean(profile.email)) {
-            setEmployerEmail(clean(profile.email));
-          }
         }
       } catch (profileError) {
         console.warn(
@@ -278,10 +269,6 @@ export default function LocumDirectoryPage() {
 
           if (companyName) {
             setEmployerName(companyName);
-          }
-
-          if (clean(company.email)) {
-            setEmployerEmail(clean(company.email));
           }
         }
       } catch (companyError) {
@@ -486,9 +473,7 @@ export default function LocumDirectoryPage() {
     setSelectedLocum(locum);
 
     setSubject(
-      `CareStaffing locum opportunity – ${fullName(
-        locum,
-      )}`,
+      `CareStaffing: New locum opportunity`,
     );
 
     setMessage(
@@ -496,10 +481,10 @@ export default function LocumDirectoryPage() {
         clean(locum.first_name) ||
         "Healthcare Professional"
       },\n\n` +
-        `We are contacting you through the CareStaffing healthcare professional directory regarding a potential locum opportunity.\n\n` +
-        `Please reply to this email if you are interested or would like further information.\n\n` +
-        `Kind regards,\n` +
-        `${employerName || "CareStaffing Employer"}`,
+        `There is a new locum opportunity for you on CareStaffing.\n\n` +
+        `Please log in to your CareStaffing account to view the opportunity and respond through the platform.\n\n` +
+        `Login: https://care-staffing.com/login\n\n` +
+        `Kind regards,\nCareStaffing`,
     );
 
     setSendStatus("");
@@ -574,12 +559,8 @@ export default function LocumDirectoryPage() {
 
             message: message.trim(),
 
-            employerName:
-              employerName.trim() ||
-              "CareStaffing Employer",
-
-            employerEmail:
-              employerEmail.trim(),
+            employerName: "CareStaffing",
+            employerEmail: "",
           }),
         },
       );
@@ -600,7 +581,7 @@ export default function LocumDirectoryPage() {
       }
 
       setSendStatus(
-        `Email successfully sent to ${fullName(
+        `Notification successfully sent to ${fullName(
           selectedLocum,
         )}.`,
       );
@@ -619,7 +600,7 @@ export default function LocumDirectoryPage() {
 
       setSendStatus(
         error?.message ||
-          "Unable to send the email.",
+          "Unable to send the notification.",
       );
     } finally {
       setSending(false);
@@ -983,7 +964,7 @@ export default function LocumDirectoryPage() {
                                 : 0.45,
                             }}
                           >
-                            Email
+                            Notify
                           </button>
                         </div>
                       </article>
@@ -1006,11 +987,11 @@ export default function LocumDirectoryPage() {
                 <div
                   style={styles.modalEyebrow}
                 >
-                  CONTACT LOCUM
+                  NOTIFY LOCUM
                 </div>
 
                 <h2 style={styles.modalTitle}>
-                  Email{" "}
+                  Notify{" "}
                   {fullName(selectedLocum)}
                 </h2>
 
@@ -1041,22 +1022,6 @@ export default function LocumDirectoryPage() {
                 CareStaffing
                 &lt;info@care-staffing.com&gt;
               </div>
-
-              <label style={styles.label}>
-                Reply-to
-              </label>
-
-              <input
-                type="email"
-                value={employerEmail}
-                onChange={(event) =>
-                  setEmployerEmail(
-                    event.target.value,
-                  )
-                }
-                placeholder="Employer email address"
-                style={styles.modalInput}
-              />
 
               <label style={styles.label}>
                 Subject
@@ -1129,7 +1094,7 @@ export default function LocumDirectoryPage() {
                 >
                   {sending
                     ? "Sending..."
-                    : "Send Email"}
+                    : "Send Notification"}
                 </button>
               </div>
             </form>
