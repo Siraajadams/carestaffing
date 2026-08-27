@@ -33,15 +33,12 @@ type Shift = {
 type Application = {
   id: string;
   shift_id: string;
-
   applicant_id: string | null;
   locum_id: string | null;
-
   status: string | null;
   message: string | null;
   created_at: string | null;
   updated_at?: string | null;
-
   shift?: Shift | null;
   applicant?: ApplicantProfile | null;
 };
@@ -76,14 +73,11 @@ function ApplicantsContent() {
   const [updatingId, setUpdatingId] =
     useState<string | null>(null);
 
-  // Applicant email modal
+  // Applicant notification modal
   const [emailApplicant, setEmailApplicant] =
     useState<ApplicantProfile | null>(null);
   const [emailSubject, setEmailSubject] = useState("");
   const [emailMessage, setEmailMessage] = useState("");
-  const [employerEmail, setEmployerEmail] = useState("");
-  const [employerName, setEmployerName] =
-    useState("CareStaffing Employer");
   const [sendingEmail, setSendingEmail] = useState(false);
   const [emailStatus, setEmailStatus] = useState("");
 
@@ -94,53 +88,26 @@ function ApplicantsContent() {
   function getApplicantId(
     application: Pick<Application, "applicant_id" | "locum_id">,
   ) {
-    return (
-      application.applicant_id ||
-      application.locum_id ||
-      null
-    );
+    return application.applicant_id || application.locum_id || null;
   }
 
   function normalizeProfile(row: RawProfile): ApplicantProfile {
     return {
       id: String(row.id || ""),
-      first_name:
-        row.first_name ??
-        row.firstname ??
-        null,
-      surname:
-        row.surname ??
-        row.last_name ??
-        null,
-      email:
-        row.email ??
-        null,
-      mobile:
-        row.mobile ??
-        row.mobile_number ??
-        row.phone ??
-        null,
-      profession:
-        row.profession ??
-        null,
+      first_name: row.first_name ?? row.firstname ?? null,
+      surname: row.surname ?? row.last_name ?? null,
+      email: row.email ?? null,
+      mobile: row.mobile ?? row.mobile_number ?? row.phone ?? null,
+      profession: row.profession ?? null,
       registration_number:
         row.registration_number ??
         row.professional_registration_number ??
         row.hpcsa ??
         null,
-      city:
-        row.city ??
-        row.city_area ??
-        null,
-      country:
-        row.country ??
-        null,
-      profile_photo_url:
-        row.profile_photo_url ??
-        null,
-      cv_url:
-        row.cv_url ??
-        null,
+      city: row.city ?? row.city_area ?? null,
+      country: row.country ?? null,
+      profile_photo_url: row.profile_photo_url ?? null,
+      cv_url: row.cv_url ?? null,
     };
   }
 
@@ -154,10 +121,6 @@ function ApplicantsContent() {
     setMessageType("");
 
     try {
-      // -------------------------------------------------------
-      // 1. Logged-in employer
-      // -------------------------------------------------------
-
       const {
         data: { user },
         error: userError,
@@ -167,58 +130,6 @@ function ApplicantsContent() {
         router.replace("/login");
         return;
       }
-
-      setEmployerEmail(user.email || "");
-
-      // Load employer/company name for the email signature.
-      try {
-        const { data: employerProfile } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", user.id)
-          .maybeSingle();
-
-        const profileName =
-          employerProfile?.organisation_name ||
-          employerProfile?.company_name ||
-          [
-            employerProfile?.first_name,
-            employerProfile?.surname,
-          ]
-            .filter(Boolean)
-            .join(" ");
-
-        if (profileName) {
-          setEmployerName(profileName);
-        }
-
-        if (employerProfile?.email) {
-          setEmployerEmail(employerProfile.email);
-        }
-
-        const { data: company } = await supabase
-          .from("companies")
-          .select("*")
-          .eq("owner_id", user.id)
-          .maybeSingle();
-
-        if (company?.business_name) {
-          setEmployerName(company.business_name);
-        }
-
-        if (company?.email) {
-          setEmployerEmail(company.email);
-        }
-      } catch (employerLookupError) {
-        console.warn(
-          "Employer email identity lookup warning:",
-          employerLookupError,
-        );
-      }
-
-      // -------------------------------------------------------
-      // 2. Get employer shifts
-      // -------------------------------------------------------
 
       let shiftsQuery = supabase
         .from("shifts")
@@ -243,10 +154,8 @@ function ApplicantsContent() {
 
       if (shiftsError) {
         console.error("Employer shifts error:", shiftsError);
-
         throw new Error(
-          shiftsError.message ||
-            "Could not load employer shifts.",
+          shiftsError.message || "Could not load employer shifts.",
         );
       }
 
@@ -260,10 +169,6 @@ function ApplicantsContent() {
         setApplications([]);
         return;
       }
-
-      // -------------------------------------------------------
-      // 3. Load applications
-      // -------------------------------------------------------
 
       const {
         data: applicationRows,
@@ -297,10 +202,6 @@ function ApplicantsContent() {
         );
       }
 
-      // -------------------------------------------------------
-      // 4. Find applicant IDs
-      // -------------------------------------------------------
-
       const applicantIds = [
         ...new Set(
           (applicationRows || [])
@@ -315,26 +216,6 @@ function ApplicantsContent() {
       ] as string[];
 
       console.log("Applicant IDs:", applicantIds);
-
-      // -------------------------------------------------------
-      // 5. Get applicant profiles
-      //
-      // IMPORTANT:
-      // Use select("*") so this page works with BOTH old and new
-      // CareStaffing profile column names.
-      //
-      // Old registration code used:
-      //   mobile_number
-      //   professional_registration_number
-      //   city_area
-      //
-      // New profile page uses:
-      //   mobile
-      //   registration_number
-      //   city
-      //
-      // normalizeProfile() handles both.
-      // -------------------------------------------------------
 
       let profiles: ApplicantProfile[] = [];
 
@@ -364,9 +245,6 @@ function ApplicantsContent() {
 
         console.log("Applicant profiles:", profiles);
 
-        // If Supabase returns zero rows even though IDs exist,
-        // this usually means the profiles SELECT RLS policy is
-        // preventing employers from reading worker profiles.
         if (
           applicantIds.length > 0 &&
           profiles.length === 0
@@ -377,37 +255,26 @@ function ApplicantsContent() {
         }
       }
 
-      // -------------------------------------------------------
-      // 6. Combine everything
-      // -------------------------------------------------------
-
       const combined: Application[] =
-        (applicationRows || []).map(
-          (application) => {
-            const applicantId =
-              application.applicant_id ||
-              application.locum_id ||
-              null;
+        (applicationRows || []).map((application) => {
+          const applicantId =
+            application.applicant_id ||
+            application.locum_id ||
+            null;
 
-            return {
-              ...application,
-
-              shift:
-                shifts.find(
-                  (shift) =>
-                    shift.id ===
-                    application.shift_id,
-                ) || null,
-
-              applicant: applicantId
-                ? profiles.find(
-                    (profile) =>
-                      profile.id === applicantId,
-                  ) || null
-                : null,
-            };
-          },
-        );
+          return {
+            ...application,
+            shift:
+              shifts.find(
+                (shift) => shift.id === application.shift_id,
+              ) || null,
+            applicant: applicantId
+              ? profiles.find(
+                  (profile) => profile.id === applicantId,
+                ) || null
+              : null,
+          };
+        });
 
       console.log(
         "Combined applicant records:",
@@ -422,10 +289,8 @@ function ApplicantsContent() {
       );
 
       setMessageType("error");
-
       setMessage(
-        error?.message ||
-          "Could not load applicants.",
+        error?.message || "Could not load applicants.",
       );
     } finally {
       setLoading(false);
@@ -458,19 +323,13 @@ function ApplicantsContent() {
         return;
       }
 
-      const applicantId =
-        getApplicantId(application);
+      const applicantId = getApplicantId(application);
 
       if (!applicantId) {
         throw new Error(
           "This application does not contain an applicant/locum ID.",
         );
       }
-
-      // -------------------------------------------------------
-      // Security check:
-      // ensure this shift belongs to logged-in employer
-      // -------------------------------------------------------
 
       const {
         data: ownedShift,
@@ -492,10 +351,6 @@ function ApplicantsContent() {
         );
       }
 
-      // -------------------------------------------------------
-      // Update application
-      // -------------------------------------------------------
-
       const now = new Date().toISOString();
 
       const {
@@ -508,10 +363,7 @@ function ApplicantsContent() {
           updated_at: now,
         })
         .eq("id", application.id)
-        .eq(
-          "shift_id",
-          application.shift_id,
-        )
+        .eq("shift_id", application.shift_id)
         .select(`
           id,
           status,
@@ -523,22 +375,14 @@ function ApplicantsContent() {
           "Update application error:",
           updateError,
         );
-
         throw updateError;
       }
 
-      if (
-        !updatedRows ||
-        updatedRows.length === 0
-      ) {
+      if (!updatedRows || updatedRows.length === 0) {
         throw new Error(
           "The application was not updated. Check the shift_applications RLS update policy.",
         );
       }
-
-      // -------------------------------------------------------
-      // Update UI immediately
-      // -------------------------------------------------------
 
       setApplications((current) =>
         current.map((item) =>
@@ -578,7 +422,6 @@ function ApplicantsContent() {
       );
 
       setMessageType("error");
-
       setMessage(
         error?.message ||
           "Could not update applicant status.",
@@ -588,9 +431,8 @@ function ApplicantsContent() {
     }
   }
 
-
   // =========================================================
-  // APPLICANT EMAIL
+  // APPLICANT NOTIFICATION EMAIL
   // =========================================================
 
   function applicantFullName(applicant: ApplicantProfile) {
@@ -608,29 +450,33 @@ function ApplicantsContent() {
   ) {
     if (!applicant.email) {
       setMessageType("error");
-      setMessage("This applicant does not have an email address.");
+      setMessage(
+        "This applicant does not have an email address.",
+      );
       return;
     }
 
-    const name = applicantFullName(applicant);
     const firstName =
-      applicant.first_name?.trim() || "Healthcare Professional";
+      applicant.first_name?.trim() ||
+      "Healthcare Professional";
 
     setEmailApplicant(applicant);
+
     setEmailSubject(
       shift?.title
-        ? `CareStaffing: ${shift.title}`
-        : `CareStaffing opportunity for ${name}`,
+        ? `CareStaffing: Please log in to view your ${shift.title} update`
+        : "CareStaffing: Please log in to view your application update",
     );
 
     setEmailMessage(
       `Dear ${firstName},\n\n` +
-        `Thank you for your application through CareStaffing.` +
+        `There is an update for you on CareStaffing.` +
         (shift?.title
-          ? ` We are contacting you regarding your application for ${shift.title}.`
+          ? ` This relates to ${shift.title}.`
           : "") +
-        `\n\nPlease reply to this email if you require any further information.\n\n` +
-        `Kind regards,\n${employerName || "CareStaffing Employer"}`,
+        `\n\nPlease log in to your CareStaffing account to view the full details and any actions required.\n\n` +
+        `Login: https://care-staffing.com/login\n\n` +
+        `Kind regards,\nCareStaffing`,
     );
 
     setEmailStatus("");
@@ -651,17 +497,23 @@ function ApplicantsContent() {
     event.preventDefault();
 
     if (!emailApplicant?.email) {
-      setEmailStatus("Applicant email address is missing.");
+      setEmailStatus(
+        "Applicant email address is missing.",
+      );
       return;
     }
 
     if (!emailSubject.trim()) {
-      setEmailStatus("Please enter an email subject.");
+      setEmailStatus(
+        "Please enter an email subject.",
+      );
       return;
     }
 
     if (!emailMessage.trim()) {
-      setEmailStatus("Please enter an email message.");
+      setEmailStatus(
+        "Please enter an email message.",
+      );
       return;
     }
 
@@ -679,9 +531,8 @@ function ApplicantsContent() {
           locumName: applicantFullName(emailApplicant),
           subject: emailSubject.trim(),
           message: emailMessage.trim(),
-          employerName:
-            employerName.trim() || "CareStaffing Employer",
-          employerEmail: employerEmail.trim(),
+          employerName: "CareStaffing",
+          employerEmail: "",
         }),
       });
 
@@ -694,7 +545,9 @@ function ApplicantsContent() {
       } catch {
         result = {
           success: false,
-          error: raw || "The email service returned an invalid response.",
+          error:
+            raw ||
+            "The email service returned an invalid response.",
         };
       }
 
@@ -706,7 +559,7 @@ function ApplicantsContent() {
       }
 
       setEmailStatus(
-        `Email successfully sent to ${applicantFullName(
+        `Notification successfully sent to ${applicantFullName(
           emailApplicant,
         )}.`,
       );
@@ -718,10 +571,14 @@ function ApplicantsContent() {
         setEmailStatus("");
       }, 1800);
     } catch (error: any) {
-      console.error("Applicant email error:", error);
+      console.error(
+        "Applicant email error:",
+        error,
+      );
 
       setEmailStatus(
-        error?.message || "Unable to send applicant email.",
+        error?.message ||
+          "Unable to send applicant notification.",
       );
     } finally {
       setSendingEmail(false);
@@ -776,10 +633,6 @@ function ApplicantsContent() {
     );
   }
 
-  // =========================================================
-  // LOADING
-  // =========================================================
-
   if (loading) {
     return (
       <main style={styles.loadingPage}>
@@ -791,24 +644,16 @@ function ApplicantsContent() {
           <h2>Loading Applicants</h2>
 
           <p style={styles.muted}>
-            Loading healthcare
-            professionals who applied for
-            your shifts...
+            Loading healthcare professionals who applied for your shifts...
           </p>
         </div>
       </main>
     );
   }
 
-  // =========================================================
-  // UI
-  // =========================================================
-
   return (
     <main style={styles.page}>
       <div style={styles.container}>
-        {/* TOP NAV */}
-
         <div style={styles.topBar}>
           <Link
             href="/employer"
@@ -840,6 +685,13 @@ function ApplicantsContent() {
             </Link>
 
             <Link
+              href="/employer/locum-directory"
+              style={styles.navLink}
+            >
+              Locum Directory
+            </Link>
+
+            <Link
               href="/employer/profile"
               style={styles.navLink}
             >
@@ -856,8 +708,6 @@ function ApplicantsContent() {
           </div>
         </div>
 
-        {/* HERO */}
-
         <section style={styles.hero}>
           <div>
             <p style={styles.heroLabel}>
@@ -869,10 +719,7 @@ function ApplicantsContent() {
             </h1>
 
             <p style={styles.heroText}>
-              Review and approve
-              healthcare professionals
-              who have applied for your
-              shifts.
+              Review and approve healthcare professionals who have applied for your shifts.
             </p>
           </div>
 
@@ -886,8 +733,6 @@ function ApplicantsContent() {
           )}
         </section>
 
-        {/* MESSAGE */}
-
         {message && (
           <div
             style={
@@ -900,8 +745,6 @@ function ApplicantsContent() {
           </div>
         )}
 
-        {/* EMPTY */}
-
         {applications.length === 0 ? (
           <section style={styles.emptyCard}>
             <div style={styles.emptyIcon}>
@@ -911,9 +754,7 @@ function ApplicantsContent() {
             <h2>No applicants yet</h2>
 
             <p style={styles.muted}>
-              Applications from
-              healthcare professionals
-              will appear here.
+              Applications from healthcare professionals will appear here.
             </p>
 
             <Link
@@ -925,424 +766,328 @@ function ApplicantsContent() {
           </section>
         ) : (
           <div style={styles.applicationList}>
-            {applications.map(
-              (application) => {
-                const applicant =
-                  application.applicant;
+            {applications.map((application) => {
+              const applicant =
+                application.applicant;
 
-                const shift =
-                  application.shift;
+              const shift =
+                application.shift;
 
-                const rawStatus = (
-                  application.status ||
-                  "pending"
-                ).toLowerCase();
+              const rawStatus = (
+                application.status ||
+                "pending"
+              ).toLowerCase();
 
-                // Existing "applied" records are shown as pending.
-                const status =
-                  rawStatus === "applied"
-                    ? "pending"
-                    : rawStatus === "approved"
-                      ? "accepted"
-                      : rawStatus === "rejected"
-                        ? "declined"
-                        : rawStatus;
+              const status =
+                rawStatus === "applied"
+                  ? "pending"
+                  : rawStatus === "approved"
+                    ? "accepted"
+                    : rawStatus === "rejected"
+                      ? "declined"
+                      : rawStatus;
 
-                const applicantId =
-                  getApplicantId(application);
+              const applicantId =
+                getApplicantId(application);
 
-                const isUpdating =
-                  updatingId ===
-                  application.id;
+              const isUpdating =
+                updatingId === application.id;
 
-                return (
-                  <article
-                    key={application.id}
-                    style={
-                      styles.applicationCard
-                    }
-                  >
-                    {/* PERSON */}
+              return (
+                <article
+                  key={application.id}
+                  style={styles.applicationCard}
+                >
+                  <div style={styles.applicationHeader}>
+                    <div style={styles.personSection}>
+                      {applicant?.profile_photo_url ? (
+                        <img
+                          src={applicant.profile_photo_url}
+                          alt="Applicant profile"
+                          style={styles.avatar}
+                        />
+                      ) : (
+                        <div style={styles.avatarFallback}>
+                          {initials(
+                            applicant?.first_name,
+                            applicant?.surname,
+                          ) || "HC"}
+                        </div>
+                      )}
 
-                    <div
-                      style={
-                        styles.applicationHeader
-                      }
-                    >
-                      <div
-                        style={
-                          styles.personSection
-                        }
-                      >
-                        {applicant?.profile_photo_url ? (
-                          <img
-                            src={
-                              applicant.profile_photo_url
-                            }
-                            alt="Applicant profile"
-                            style={styles.avatar}
-                          />
-                        ) : (
-                          <div
-                            style={
-                              styles.avatarFallback
-                            }
-                          >
-                            {initials(
-                              applicant?.first_name,
-                              applicant?.surname,
-                            ) || "HC"}
-                          </div>
+                      <div>
+                        <h2 style={styles.applicantName}>
+                          {[
+                            applicant?.first_name,
+                            applicant?.surname,
+                          ]
+                            .filter(Boolean)
+                            .join(" ") ||
+                            "Healthcare Professional"}
+                        </h2>
+
+                        <p style={styles.applicantProfession}>
+                          {applicant?.profession ||
+                            shift?.profession_required ||
+                            "Healthcare Professional"}
+                        </p>
+
+                        {!applicant && (
+                          <p style={styles.profileWarning}>
+                            Applicant ID:{" "}
+                            {applicantId ||
+                              "Not available"}
+                          </p>
                         )}
-
-                        <div>
-                          <h2
-                            style={
-                              styles.applicantName
-                            }
-                          >
-                            {[
-                              applicant?.first_name,
-                              applicant?.surname,
-                            ]
-                              .filter(Boolean)
-                              .join(" ") ||
-                              "Healthcare Professional"}
-                          </h2>
-
-                          <p
-                            style={
-                              styles.applicantProfession
-                            }
-                          >
-                            {applicant?.profession ||
-                              shift?.profession_required ||
-                              "Healthcare Professional"}
-                          </p>
-
-                          {!applicant && (
-                            <p
-                              style={
-                                styles.profileWarning
-                              }
-                            >
-                              Applicant ID:{" "}
-                              {applicantId ||
-                                "Not available"}
-                            </p>
-                          )}
-                        </div>
                       </div>
-
-                      <span
-                        style={{
-                          ...styles.statusBadge,
-                          ...(status === "accepted"
-                            ? styles.accepted
-                            : status === "declined"
-                              ? styles.declined
-                              : styles.pending),
-                        }}
-                      >
-                        {status.toUpperCase()}
-                      </span>
                     </div>
 
-                    {/* ACCEPTED NOTICE */}
+                    <span
+                      style={{
+                        ...styles.statusBadge,
+                        ...(status === "accepted"
+                          ? styles.accepted
+                          : status === "declined"
+                            ? styles.declined
+                            : styles.pending),
+                      }}
+                    >
+                      {status.toUpperCase()}
+                    </span>
+                  </div>
 
-                    {status === "accepted" && (
-                      <div
-                        style={
-                          styles.timesheetActive
-                        }
-                      >
-                        <div style={{ fontSize: 24 }}>
-                          ✓
-                        </div>
-
-                        <div>
-                          <strong>
-                            Applicant Approved
-                          </strong>
-
-                          <p
-                            style={{
-                              margin: "4px 0 0",
-                            }}
-                          >
-                            Timesheet activated for
-                            this shift. The locum can
-                            now submit their actual
-                            daily start and end times.
-                          </p>
-                        </div>
+                  {status === "accepted" && (
+                    <div style={styles.timesheetActive}>
+                      <div style={{ fontSize: 24 }}>
+                        ✓
                       </div>
-                    )}
 
-                    {/* DECLINED NOTICE */}
-
-                    {status === "declined" && (
-                      <div
-                        style={
-                          styles.declinedNotice
-                        }
-                      >
-                        Applicant declined. The posted
-                        shift remains available for
-                        another healthcare
-                        professional.
-                      </div>
-                    )}
-
-                    {/* DETAILS */}
-
-                    <div style={styles.infoGrid}>
-                      <Info
-                        label="Applied For"
-                        value={
-                          shift?.title ||
-                          "Shift"
-                        }
-                      />
-
-                      <Info
-                        label="Profession"
-                        value={
-                          applicant?.profession ||
-                          shift?.profession_required ||
-                          "—"
-                        }
-                      />
-
-                      <Info
-                        label="Shift Date"
-                        value={
-                          shift?.start_date
-                            ? formatDate(
-                                shift.start_date,
-                              )
-                            : "—"
-                        }
-                      />
-
-                      <Info
-                        label="Location"
-                        value={
-                          shift?.city ||
-                          applicant?.city ||
-                          "—"
-                        }
-                      />
-
-                      <Info
-                        label="Registration"
-                        value={
-                          applicant?.registration_number ||
-                          "—"
-                        }
-                      />
-
-                      <Info
-                        label="Email"
-                        value={
-                          applicant?.email ||
-                          "—"
-                        }
-                      />
-
-                      <Info
-                        label="Mobile"
-                        value={
-                          applicant?.mobile ||
-                          "—"
-                        }
-                      />
-
-                      <Info
-                        label="Country"
-                        value={
-                          applicant?.country ||
-                          "—"
-                        }
-                      />
-
-                      <Info
-                        label="Applied"
-                        value={
-                          application.created_at
-                            ? formatDate(
-                                application.created_at,
-                              )
-                            : "—"
-                        }
-                      />
-                    </div>
-
-                    {/* APPLICANT MESSAGE */}
-
-                    {application.message && (
-                      <div
-                        style={
-                          styles.messageBox
-                        }
-                      >
+                      <div>
                         <strong>
-                          Applicant Message
+                          Applicant Approved
                         </strong>
 
                         <p
                           style={{
-                            marginBottom: 0,
+                            margin: "4px 0 0",
                           }}
                         >
-                          {application.message}
+                          Timesheet activated for this shift. The locum can now submit their actual daily start and end times.
                         </p>
                       </div>
+                    </div>
+                  )}
+
+                  {status === "declined" && (
+                    <div style={styles.declinedNotice}>
+                      Applicant declined. The posted shift remains available for another healthcare professional.
+                    </div>
+                  )}
+
+                  <div style={styles.infoGrid}>
+                    <Info
+                      label="Applied For"
+                      value={
+                        shift?.title ||
+                        "Shift"
+                      }
+                    />
+
+                    <Info
+                      label="Profession"
+                      value={
+                        applicant?.profession ||
+                        shift?.profession_required ||
+                        "—"
+                      }
+                    />
+
+                    <Info
+                      label="Shift Date"
+                      value={
+                        shift?.start_date
+                          ? formatDate(
+                              shift.start_date,
+                            )
+                          : "—"
+                      }
+                    />
+
+                    <Info
+                      label="Location"
+                      value={
+                        shift?.city ||
+                        applicant?.city ||
+                        "—"
+                      }
+                    />
+
+                    <Info
+                      label="Registration"
+                      value={
+                        applicant?.registration_number ||
+                        "—"
+                      }
+                    />
+
+                    <Info
+                      label="Email"
+                      value={
+                        applicant?.email ||
+                        "—"
+                      }
+                    />
+
+                    <Info
+                      label="Mobile"
+                      value={
+                        applicant?.mobile ||
+                        "—"
+                      }
+                    />
+
+                    <Info
+                      label="Country"
+                      value={
+                        applicant?.country ||
+                        "—"
+                      }
+                    />
+
+                    <Info
+                      label="Applied"
+                      value={
+                        application.created_at
+                          ? formatDate(
+                              application.created_at,
+                            )
+                          : "—"
+                      }
+                    />
+                  </div>
+
+                  {application.message && (
+                    <div style={styles.messageBox}>
+                      <strong>
+                        Applicant Message
+                      </strong>
+
+                      <p
+                        style={{
+                          marginBottom: 0,
+                        }}
+                      >
+                        {application.message}
+                      </p>
+                    </div>
+                  )}
+
+                  <div style={styles.actions}>
+                    {applicant?.cv_url && (
+                      <a
+                        href={applicant.cv_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={styles.secondaryButton}
+                      >
+                        📄 View CV
+                      </a>
                     )}
 
-                    {/* ACTIONS */}
+                    {applicant?.email && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openApplicantEmail(
+                            applicant,
+                            shift,
+                          )
+                        }
+                        style={styles.secondaryButton}
+                      >
+                        ✉️ Notify
+                      </button>
+                    )}
 
-                    <div style={styles.actions}>
-                      {applicant?.cv_url && (
-                        <a
-                          href={applicant.cv_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={
-                            styles.secondaryButton
-                          }
-                        >
-                          📄 View CV
-                        </a>
-                      )}
+                    {applicant?.mobile && (
+                      <a
+                        href={`tel:${cleanPhone(
+                          applicant.mobile,
+                        )}`}
+                        style={styles.secondaryButton}
+                      >
+                        📞 Call
+                      </a>
+                    )}
 
-                      {applicant?.email && (
+                    {applicant?.mobile && (
+                      <a
+                        href={`https://wa.me/${cleanPhone(
+                          applicant.mobile,
+                        ).replace(/^\+/, "")}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={styles.secondaryButton}
+                      >
+                        WhatsApp
+                      </a>
+                    )}
+
+                    {status === "pending" && (
+                      <>
                         <button
                           type="button"
+                          disabled={isUpdating}
                           onClick={() =>
-                            openApplicantEmail(
-                              applicant,
-                              shift,
+                            updateApplication(
+                              application,
+                              "accepted",
                             )
                           }
-                          style={
-                            styles.secondaryButton
-                          }
+                          style={{
+                            ...styles.acceptButton,
+                            opacity: isUpdating
+                              ? 0.6
+                              : 1,
+                          }}
                         >
-                          ✉️ Email
+                          {isUpdating
+                            ? "Updating..."
+                            : "✓ Approve Applicant"}
                         </button>
-                      )}
 
-                      {applicant?.mobile && (
-                        <a
-                          href={`tel:${cleanPhone(
-                            applicant.mobile,
-                          )}`}
-                          style={
-                            styles.secondaryButton
+                        <button
+                          type="button"
+                          disabled={isUpdating}
+                          onClick={() =>
+                            updateApplication(
+                              application,
+                              "declined",
+                            )
                           }
+                          style={{
+                            ...styles.declineButton,
+                            opacity: isUpdating
+                              ? 0.6
+                              : 1,
+                          }}
                         >
-                          📞 Call
-                        </a>
-                      )}
+                          {isUpdating
+                            ? "Updating..."
+                            : "✕ Decline Applicant"}
+                        </button>
+                      </>
+                    )}
 
-                      {applicant?.mobile && (
-                        <a
-                          href={`https://wa.me/${cleanPhone(
-                            applicant.mobile,
-                          ).replace(/^\+/, "")}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={
-                            styles.secondaryButton
-                          }
+                    {status === "accepted" && (
+                      <>
+                        <Link
+                          href={`/employer/shifts?shift=${application.shift_id}`}
+                          style={styles.secondaryButton}
                         >
-                          WhatsApp
-                        </a>
-                      )}
+                          View Shift
+                        </Link>
 
-                      {/* PENDING */}
-
-                      {status === "pending" && (
-                        <>
-                          <button
-                            type="button"
-                            disabled={isUpdating}
-                            onClick={() =>
-                              updateApplication(
-                                application,
-                                "accepted",
-                              )
-                            }
-                            style={{
-                              ...styles.acceptButton,
-                              opacity: isUpdating
-                                ? 0.6
-                                : 1,
-                            }}
-                          >
-                            {isUpdating
-                              ? "Updating..."
-                              : "✓ Approve Applicant"}
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={isUpdating}
-                            onClick={() =>
-                              updateApplication(
-                                application,
-                                "declined",
-                              )
-                            }
-                            style={{
-                              ...styles.declineButton,
-                              opacity: isUpdating
-                                ? 0.6
-                                : 1,
-                            }}
-                          >
-                            {isUpdating
-                              ? "Updating..."
-                              : "✕ Decline Applicant"}
-                          </button>
-                        </>
-                      )}
-
-                      {/* ACCEPTED */}
-
-                      {status === "accepted" && (
-                        <>
-                          <Link
-                            href={`/employer/shifts?shift=${application.shift_id}`}
-                            style={
-                              styles.secondaryButton
-                            }
-                          >
-                            View Shift
-                          </Link>
-
-                          <button
-                            type="button"
-                            disabled={isUpdating}
-                            onClick={() =>
-                              updateApplication(
-                                application,
-                                "pending",
-                              )
-                            }
-                            style={
-                              styles.secondaryButton
-                            }
-                          >
-                            Return to Pending
-                          </button>
-                        </>
-                      )}
-
-                      {/* DECLINED */}
-
-                      {status === "declined" && (
                         <button
                           type="button"
                           disabled={isUpdating}
@@ -1352,18 +1097,32 @@ function ApplicantsContent() {
                               "pending",
                             )
                           }
-                          style={
-                            styles.secondaryButton
-                          }
+                          style={styles.secondaryButton}
                         >
                           Return to Pending
                         </button>
-                      )}
-                    </div>
-                  </article>
-                );
-              },
-            )}
+                      </>
+                    )}
+
+                    {status === "declined" && (
+                      <button
+                        type="button"
+                        disabled={isUpdating}
+                        onClick={() =>
+                          updateApplication(
+                            application,
+                            "pending",
+                          )
+                        }
+                        style={styles.secondaryButton}
+                      >
+                        Return to Pending
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
       </div>
@@ -1374,11 +1133,11 @@ function ApplicantsContent() {
             <div style={styles.modalHeader}>
               <div>
                 <p style={styles.modalEyebrow}>
-                  CONTACT APPLICANT
+                  NOTIFY APPLICANT
                 </p>
 
                 <h2 style={styles.modalTitle}>
-                  Email {applicantFullName(emailApplicant)}
+                  Notify {applicantFullName(emailApplicant)}
                 </h2>
 
                 <p style={styles.modalRecipient}>
@@ -1391,48 +1150,46 @@ function ApplicantsContent() {
                 onClick={closeApplicantEmail}
                 disabled={sendingEmail}
                 style={styles.closeButton}
-                aria-label="Close email"
+                aria-label="Close notification"
               >
                 ×
               </button>
             </div>
 
             <form onSubmit={sendApplicantEmail}>
-              <label style={styles.emailLabel}>From</label>
+              <label style={styles.emailLabel}>
+                From
+              </label>
 
               <div style={styles.readOnlyField}>
-                CareStaffing &lt;info@care-staffing.com&gt;
+                CareStaffing Notifications &lt;info@care-staffing.com&gt;
               </div>
 
-              <label style={styles.emailLabel}>Reply-to</label>
-
-              <input
-                type="email"
-                value={employerEmail}
-                onChange={(event) =>
-                  setEmployerEmail(event.target.value)
-                }
-                placeholder="Employer email address"
-                style={styles.emailInput}
-              />
-
-              <label style={styles.emailLabel}>Subject</label>
+              <label style={styles.emailLabel}>
+                Subject
+              </label>
 
               <input
                 value={emailSubject}
                 onChange={(event) =>
-                  setEmailSubject(event.target.value)
+                  setEmailSubject(
+                    event.target.value,
+                  )
                 }
                 style={styles.emailInput}
                 required
               />
 
-              <label style={styles.emailLabel}>Message</label>
+              <label style={styles.emailLabel}>
+                Message
+              </label>
 
               <textarea
                 value={emailMessage}
                 onChange={(event) =>
-                  setEmailMessage(event.target.value)
+                  setEmailMessage(
+                    event.target.value,
+                  )
                 }
                 rows={10}
                 style={styles.emailTextarea}
@@ -1444,7 +1201,9 @@ function ApplicantsContent() {
                   style={
                     emailStatus
                       .toLowerCase()
-                      .includes("successfully")
+                      .includes(
+                        "successfully",
+                      )
                       ? styles.emailSuccess
                       : styles.emailError
                   }
@@ -1468,12 +1227,14 @@ function ApplicantsContent() {
                   disabled={sendingEmail}
                   style={{
                     ...styles.modalSendButton,
-                    opacity: sendingEmail ? 0.6 : 1,
+                    opacity: sendingEmail
+                      ? 0.6
+                      : 1,
                   }}
                 >
                   {sendingEmail
                     ? "Sending..."
-                    : "Send Email"}
+                    : "Send Notification"}
                 </button>
               </div>
             </form>
@@ -1837,7 +1598,8 @@ const styles: Record<
     background: "#ffffff",
     borderRadius: 20,
     padding: 28,
-    boxShadow: "0 30px 80px rgba(15,23,42,0.28)",
+    boxShadow:
+      "0 30px 80px rgba(15,23,42,0.28)",
   },
 
   modalHeader: {
@@ -1992,10 +1754,10 @@ const styles: Record<
   },
 
   errorMessage: {
-  background: "#fee2e2",
-  color: "#991b1b",
-  padding: 14,
-  borderRadius: 12,
-  marginBottom: 18,
-},
+    background: "#fee2e2",
+    color: "#991b1b",
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 18,
+  },
 };
