@@ -77,6 +77,51 @@ type Company = {
   address?: string | null;
 };
 
+
+async function getCurrentUserSafely() {
+  /*
+   * Prefer the locally cached session first.
+   * This avoids unnecessary /auth/v1/user requests and keeps the
+   * employer portal usable during a temporary Supabase Auth timeout.
+   */
+  try {
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError) {
+      console.warn("CareStaffing session lookup warning:", sessionError);
+    }
+
+    if (session?.user) {
+      return session.user;
+    }
+  } catch (sessionError) {
+    console.warn("CareStaffing local session lookup failed:", sessionError);
+  }
+
+  /*
+   * If no cached session exists, fall back to a server-validated user lookup.
+   */
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      console.warn("CareStaffing user lookup warning:", userError);
+      return null;
+    }
+
+    return user ?? null;
+  } catch (userError) {
+    console.warn("CareStaffing auth temporarily unavailable:", userError);
+    return null;
+  }
+}
+
 export default function EmployerPage() {
   const router = useRouter();
 
@@ -145,13 +190,14 @@ export default function EmployerPage() {
     setMessageType("");
 
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+      const user = await getCurrentUserSafely();
 
-      if (userError || !user) {
-        router.replace("/login");
+      if (!user) {
+        setMessageType("error");
+        setMessage(
+          "Your CareStaffing session could not be confirmed. Please try again. If this continues, sign in again.",
+        );
+        setPageLoading(false);
         return;
       }
 
@@ -388,12 +434,13 @@ export default function EmployerPage() {
     setPosting(true);
 
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const user = await getCurrentUserSafely();
 
       if (!user) {
-        router.replace("/login");
+        setMessageType("error");
+        setMessage(
+          "Your CareStaffing session could not be confirmed. Please try again before posting the shift.",
+        );
         return;
       }
 
@@ -515,9 +562,13 @@ export default function EmployerPage() {
   }
 
   async function logout() {
-    await supabase.auth.signOut();
-
-    router.replace("/login");
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.warn("CareStaffing logout warning:", error);
+    } finally {
+      router.replace("/login");
+    }
   }
 
   if (pageLoading) {
