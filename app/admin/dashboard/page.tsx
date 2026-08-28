@@ -91,25 +91,23 @@ export default function AdminDashboardPage() {
       }
 
       // ADMIN SECURITY CHECK
-      const { data: adminProfile, error: adminError } = await supabase
-        .from("profiles")
-        .select("id, role, account_type")
-        .eq("id", user.id)
-        .maybeSingle();
+      const { data: adminRecord, error: adminError } = await supabase
+  .from("admins")
+  .select("user_id")
+  .eq("user_id", user.id)
+  .maybeSingle();
 
-      if (adminError) {
-        throw adminError;
-      }
+if (adminError) {
+  throw adminError;
+}
 
-      const isAdmin =
-        adminProfile?.role === "admin" ||
-        adminProfile?.account_type === "admin";
-
-      if (!isAdmin) {
-        setError("You do not have permission to access the admin dashboard.");
-        setLoading(false);
-        return;
-      }
+if (!adminRecord) {
+  setError(
+    `You do not have permission to access the admin dashboard. Logged in as: ${user.email}`
+  );
+  setLoading(false);
+  return;
+}
 
       await Promise.all([loadLocums(), loadEmployers()]);
     } catch (err: any) {
