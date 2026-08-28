@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
 
 type Locum = {
@@ -57,8 +56,6 @@ const professionOrder = [
 ];
 
 export default function AdminDashboardPage() {
-  const router = useRouter();
-
   const [locums, setLocums] = useState<Locum[]>([]);
   const [employers, setEmployers] = useState<Employer[]>([]);
 
@@ -81,34 +78,8 @@ export default function AdminDashboardPage() {
     setError("");
 
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        router.push("/login");
-        return;
-      }
-
-      // ADMIN SECURITY CHECK
-      const { data: adminRecord, error: adminError } = await supabase
-  .from("admins")
-  .select("user_id")
-  .eq("user_id", user.id)
-  .maybeSingle();
-
-if (adminError) {
-  throw adminError;
-}
-
-if (!adminRecord) {
-  setError(
-    `You do not have permission to access the admin dashboard. Logged in as: ${user.email}`
-  );
-  setLoading(false);
-  return;
-}
-
+      // ADMIN LOGIN CHECK REMOVED
+      // Dashboard loads directly without requiring an authenticated admin session.
       await Promise.all([loadLocums(), loadEmployers()]);
     } catch (err: any) {
       setError(err?.message || "Unable to load admin dashboard.");
