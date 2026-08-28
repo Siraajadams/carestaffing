@@ -48,6 +48,9 @@ const countryDetails: Record<
 
 const professions = [
   "Pharmacist",
+  "Pharmacist PIMART Permit",
+  "Pharmacist PCDT Permit",
+  "Pharmacist PCDT and PIMART Permit",
   "Pharmacy Technician",
   "Nurse",
   "Doctor",
@@ -251,8 +254,30 @@ export default function WorkerRegisterPage() {
 
     if (signupError || !data.user) {
       setLoading(false);
+
+      const rawMessage = signupError?.message?.toLowerCase() || "";
+
+      if (rawMessage.includes("rate limit")) {
+        setError(
+          "CareStaffing registration is temporarily busy because the authentication email limit has been reached. Please wait a few minutes and try again. If you already created an account, use Login instead.",
+        );
+        return;
+      }
+
+      if (
+        rawMessage.includes("already registered") ||
+        rawMessage.includes("already been registered") ||
+        rawMessage.includes("user already exists")
+      ) {
+        setError(
+          "An account already exists for this email address. Please use Login instead.",
+        );
+        return;
+      }
+
       setError(
-        signupError?.message || "Registration failed.",
+        signupError?.message ||
+          "We could not create your CareStaffing account. Please try again.",
       );
       return;
     }
@@ -311,7 +336,7 @@ export default function WorkerRegisterPage() {
 
     if (!data.session) {
       setMessage(
-        "Account created. Please confirm your email and then log in.",
+        "Your CareStaffing account has been created. Please confirm your email, then log in to complete your Professional Profile.",
       );
 
       setTimeout(() => {
@@ -532,6 +557,12 @@ export default function WorkerRegisterPage() {
               />
             </div>
           </section>
+
+          <p style={styles.registrationNote}>
+            By creating an account you will be registered as a CareStaffing
+            healthcare worker. Please click the button once and wait while your
+            account is created.
+          </p>
 
           <button
             type="submit"
@@ -800,6 +831,15 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#155e75",
     borderRadius: "12px",
     lineHeight: 1.5,
+  },
+  registrationNote: {
+    margin: 0,
+    padding: "12px 14px",
+    background: "#eff6ff",
+    color: "#1e3a8a",
+    borderRadius: "12px",
+    lineHeight: 1.5,
+    fontSize: "14px",
   },
   button: {
     width: "100%",
