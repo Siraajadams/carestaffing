@@ -106,10 +106,11 @@ export default function AdminDashboardPage() {
         account_type
       `,
       )
-      .or("role.eq.worker,account_type.eq.worker")
       .order("surname", { ascending: true });
 
-    if (error) throw error;
+    if (error) {
+      throw new Error(`Profiles load failed: ${error.message}`);
+    }
 
     setLocums((data || []) as Locum[]);
   }
@@ -130,7 +131,9 @@ export default function AdminDashboardPage() {
       )
       .order("business_name", { ascending: true });
 
-    if (error) throw error;
+    if (error) {
+      throw new Error(`Companies load failed: ${error.message}`);
+    }
 
     setEmployers((data || []) as Employer[]);
   }
@@ -475,7 +478,7 @@ export default function AdminDashboardPage() {
                           colSpan={6}
                           style={styles.empty}
                         >
-                          No locums found for these filters.
+                          No locums are currently visible. If records exist in Supabase, check the SELECT/RLS policy for the profiles table.
                         </td>
                       </tr>
                     )}
