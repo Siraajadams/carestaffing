@@ -31,6 +31,31 @@ type Employer = {
   source?: "company" | "profile";
 };
 
+type OpenLocumShift = {
+  id: string;
+  title: string;
+  profession: string;
+  employer: string;
+  province: string | null;
+  city: string | null;
+  shift_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  status: string;
+  requested: number;
+  accepted: number;
+  remaining: number;
+  is_available: boolean;
+};
+
+type DemandByProfession = {
+  profession: string;
+  shifts: number;
+  requested: number;
+  accepted: number;
+  available: number;
+};
+
 const provinces = [
   "All Provinces",
   "Western Cape",
@@ -61,6 +86,8 @@ const professionOrder = [
 export default function AdminDashboardPage() {
   const [locums, setLocums] = useState<Locum[]>([]);
   const [employers, setEmployers] = useState<Employer[]>([]);
+  const [openLocumShifts, setOpenLocumShifts] = useState<OpenLocumShift[]>([]);
+  const [demandByProfession, setDemandByProfession] = useState<DemandByProfession[]>([]);
 
   const [province, setProvince] = useState("All Provinces");
   const [profession, setProfession] = useState("All Professions");
@@ -69,7 +96,7 @@ export default function AdminDashboardPage() {
   const [error, setError] = useState("");
 
   const [view, setView] = useState<
-    "locums" | "employers" | "profession" | "province"
+    "locums" | "employers" | "profession" | "province" | "openShifts" | "demand"
   >("locums");
 
   useEffect(() => {
@@ -106,6 +133,12 @@ export default function AdminDashboardPage() {
 
       setLocums((result?.locums || []) as Locum[]);
       setEmployers((result?.employers || []) as Employer[]);
+      setOpenLocumShifts(
+        (result?.open_locum_shifts || []) as OpenLocumShift[],
+      );
+      setDemandByProfession(
+        (result?.demand_by_profession || []) as DemandByProfession[],
+      );
     } catch (err: any) {
       console.error("Admin dashboard load error:", err);
       setError(err?.message || "Unable to load admin dashboard.");
@@ -151,6 +184,31 @@ export default function AdminDashboardPage() {
       );
     });
   }, [employers, province]);
+
+  const filteredOpenLocumShifts = useMemo(() => {
+    return openLocumShifts.filter((shift) => {
+      const provinceMatch =
+        province === "All Provinces" || shift.province === province;
+
+      const professionMatch =
+        profession === "All Professions" ||
+        shift.profession === profession;
+
+      return provinceMatch && professionMatch;
+    });
+  }, [openLocumShifts, province, profession]);
+
+  const openRequestTotals = useMemo(() => {
+    return filteredOpenLocumShifts.reduce(
+      (totals, shift) => {
+        totals.requested += shift.requested;
+        totals.accepted += shift.accepted;
+        totals.available += shift.remaining;
+        return totals;
+      },
+      { requested: 0, accepted: 0, available: 0 },
+    );
+  }, [filteredOpenLocumShifts]);
 
   const professionSummary = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -279,6 +337,27 @@ export default function AdminDashboardPage() {
               onClick={() => setView("employers")}
             />
 
+            <StatCard
+              label="Employer Locum Requests"
+              value={openRequestTotals.requested}
+              subtitle="Total locum positions requested"
+              onClick={() => setView("openShifts")}
+            />
+
+            <StatCard
+              label="Accepted / Filled"
+              value={openRequestTotals.accepted}
+              subtitle="Locum positions already accepted"
+              onClick={() => setView("openShifts")}
+            />
+
+            <StatCard
+              label="Still Available"
+              value={openRequestTotals.available}
+              subtitle="Open locum positions remaining"
+              onClick={() => setView("openShifts")}
+            />
+
             {professionSummary.map(([professionName, total]) => (
               <StatCard
                 key={professionName}
@@ -357,6 +436,20 @@ export default function AdminDashboardPage() {
               onClick={() => setView("employers")}
             >
               Employers
+            </Tab>
+
+            <Tab
+              active={view === "openShifts"}
+              onClick={() => setView("openShifts")}
+            >
+              Open Locums
+            </Tab>
+
+            <Tab
+              active={view === "demand"}
+              onClick={() => setView("demand")}
+            >
+              Employer Demand
             </Tab>
 
             <Tab
@@ -516,6 +609,156 @@ export default function AdminDashboardPage() {
                       <tr>
                         <td colSpan={6} style={styles.empty}>
                           No registered employers are currently visible.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* OPEN LOCUM REQUESTS */}
+
+          {view === "openShifts" && (
+            <section style={styles.panel}>
+              <h2 style={styles.panelTitle}>Employer Open Locum Requests</h2>
+
+              <p style={styles.panelSub}>
+                {filteredOpenLocumShifts.length} shifts ·{" "}
+                {openRequestTotals.requested} positions requested ·{" "}
+                {openRequestTotals.accepted} accepted ·{" "}
+                {openRequestTotals.available} still available.
+              </p>
+
+              <div style={styles.tableWrap}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>Employer</th>
+                      <th style={styles.th}>Profession</th>
+                      <th style={styles.th}>Shift</th>
+                      <th style={styles.th}>Province / City</th>
+                      <th style={styles.th}>Requested</th>
+                      <th style={styles.th}>Accepted</th>
+                      <th style={styles.th}>Still Available</th>
+                      <th style={styles.th}>Status</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {filteredOpenLocumShifts.map((shift) => (
+                      <tr key={shift.id}>
+                        <td style={styles.td}>
+                          <strong>{shift.employer}</strong>
+                        </td>
+
+                        <td style={styles.td}>{shift.profession}</td>
+
+                        <td style={styles.td}>
+                          <strong>{shift.title}</strong>
+                          <div>
+                            {shift.shift_date || "Date not specified"}
+                            {shift.start_time ? ` · ${shift.start_time}` : ""}
+                            {shift.end_time ? `–${shift.end_time}` : ""}
+                          </div>
+                        </td>
+
+                        <td style={styles.td}>
+                          {[shift.province, shift.city]
+                            .filter(Boolean)
+                            .join(" · ") || "—"}
+                        </td>
+
+                        <td style={styles.td}>{shift.requested}</td>
+                        <td style={styles.td}>{shift.accepted}</td>
+
+                        <td style={styles.td}>
+                          <strong>{shift.remaining}</strong>
+                        </td>
+
+                        <td style={styles.td}>
+                          <span
+                            style={
+                              shift.remaining > 0
+                                ? styles.availableBadge
+                                : styles.filledBadge
+                            }
+                          >
+                            {shift.remaining > 0
+                              ? "Available"
+                              : "Filled / Closed"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+
+                    {!filteredOpenLocumShifts.length && (
+                      <tr>
+                        <td colSpan={8} style={styles.empty}>
+                          No employer locum requests match the current filters.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* EMPLOYER DEMAND BY PROFESSION */}
+
+          {view === "demand" && (
+            <section style={styles.panel}>
+              <h2 style={styles.panelTitle}>Employer Demand by Profession</h2>
+
+              <p style={styles.panelSub}>
+                Requested, accepted and still-available locum positions by profession.
+              </p>
+
+              <div style={styles.tableWrap}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>Profession</th>
+                      <th style={styles.th}>Open Shifts</th>
+                      <th style={styles.th}>Requested</th>
+                      <th style={styles.th}>Accepted</th>
+                      <th style={styles.th}>Still Available</th>
+                      <th style={styles.th}>Action</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {demandByProfession.map((item) => (
+                      <tr key={item.profession}>
+                        <td style={styles.td}>
+                          <strong>{item.profession}</strong>
+                        </td>
+                        <td style={styles.td}>{item.shifts}</td>
+                        <td style={styles.td}>{item.requested}</td>
+                        <td style={styles.td}>{item.accepted}</td>
+                        <td style={styles.td}>
+                          <strong>{item.available}</strong>
+                        </td>
+                        <td style={styles.td}>
+                          <button
+                            style={styles.smallButton}
+                            onClick={() => {
+                              setProfession(item.profession);
+                              setView("openShifts");
+                            }}
+                          >
+                            View Open Locums
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+
+                    {!demandByProfession.length && (
+                      <tr>
+                        <td colSpan={6} style={styles.empty}>
+                          No employer demand is currently recorded.
                         </td>
                       </tr>
                     )}
@@ -950,6 +1193,26 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     cursor: "pointer",
     fontWeight: 800,
+  },
+
+  availableBadge: {
+    display: "inline-block",
+    padding: "6px 10px",
+    borderRadius: "999px",
+    background: "#dcfce7",
+    color: "#166534",
+    fontWeight: 800,
+    fontSize: "12px",
+  },
+
+  filledBadge: {
+    display: "inline-block",
+    padding: "6px 10px",
+    borderRadius: "999px",
+    background: "#e2e8f0",
+    color: "#475569",
+    fontWeight: 800,
+    fontSize: "12px",
   },
 
   error: {
