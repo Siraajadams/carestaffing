@@ -180,11 +180,14 @@ export default function AdminDashboardPage() {
     const counts: Record<string, number> = {};
 
     filteredLocums.forEach((locum) => {
-      const key = locum.profession || "Not specified";
+      const key = locum.profession?.trim() || "Not specified";
       counts[key] = (counts[key] || 0) + 1;
     });
 
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    return Object.entries(counts).sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return a[0].localeCompare(b[0]);
+    });
   }, [filteredLocums]);
 
   const provinceSummary = useMemo(() => {
@@ -229,15 +232,6 @@ export default function AdminDashboardPage() {
         (a[1].locums + a[1].employers),
     );
   }, [locums, employers]);
-
-  function countProfession(name: string) {
-    return filteredLocums.filter(
-      (locum) =>
-        locum.profession
-          ?.toLowerCase()
-          .includes(name.toLowerCase()),
-    ).length;
-  }
 
   function drillProfession(professionName: string) {
     setProfession(professionName);
@@ -293,10 +287,13 @@ export default function AdminDashboardPage() {
 
           <section style={styles.statsGrid}>
             <StatCard
-              label="Total Locums"
+              label="Total Available Locums"
               value={filteredLocums.length}
-              subtitle="Healthcare professionals"
-              onClick={() => setView("locums")}
+              subtitle="All healthcare professionals"
+              onClick={() => {
+                setProfession("All Professions");
+                setView("locums");
+              }}
             />
 
             <StatCard
@@ -306,30 +303,20 @@ export default function AdminDashboardPage() {
               onClick={() => setView("employers")}
             />
 
-            <StatCard
-              label="Pharmacists"
-              value={countProfession("Pharmacist")}
-              subtitle="Including permit categories"
-              onClick={() => {
-                setProfession("Pharmacist");
-                setView("locums");
-              }}
-            />
-
-            <StatCard
-              label="Doctors"
-              value={countProfession("Doctor")}
-              subtitle="Registered doctors"
-              onClick={() => drillProfession("Doctor")}
-            />
-
-            <StatCard
-              label="Nurses"
-              value={countProfession("Nurse")}
-              subtitle="Registered nurses"
-              onClick={() => drillProfession("Nurse")}
-            />
+            {professionSummary.map(([professionName, total]) => (
+              <StatCard
+                key={professionName}
+                label={professionName}
+                value={total}
+                subtitle="Available locums"
+                onClick={() => drillProfession(professionName)}
+              />
+            ))}
           </section>
+
+          <p style={styles.kpiHint}>
+            Select any profession card to drill down to the individual available locums.
+          </p>
 
           {/* FILTERS */}
 
@@ -795,6 +782,13 @@ const styles: Record<string, React.CSSProperties> = {
   statSubtitle: {
     display: "block",
     marginTop: "5px",
+    color: "#64748b",
+    fontSize: "13px",
+  },
+
+  kpiHint: {
+    maxWidth: "1400px",
+    margin: "-8px auto 18px",
     color: "#64748b",
     fontSize: "13px",
   },
