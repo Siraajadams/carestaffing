@@ -169,7 +169,7 @@ export default function EmployerProfilePage() {
 
         setEmail(company.email || user.email || "");
 
-        setMobile(company.mobile || profile?.mobile || "");
+        setMobile(company.phone || company.mobile || profile?.mobile || "");
 
         setCountry(company.country || "South Africa");
         setProvince(company.province || "");
@@ -224,6 +224,12 @@ export default function EmployerProfilePage() {
     if (!country) {
       setMessageType("error");
       setMessage("Country is required.");
+      return;
+    }
+
+    if (country === "South Africa" && !province.trim()) {
+      setMessageType("error");
+      setMessage("Province is required for South African organisations.");
       return;
     }
 
@@ -283,6 +289,9 @@ export default function EmployerProfilePage() {
 
         email:
           email.trim().toLowerCase(),
+
+        phone:
+          mobile.trim() || null,
 
         mobile:
           mobile.trim() || null,
@@ -639,7 +648,7 @@ export default function EmployerProfilePage() {
               </Field>
 
               {country === "South Africa" ? (
-                <Field label="Province">
+                <Field label="Province *">
                   <select
                     value={province}
                     onChange={(e) =>
@@ -648,6 +657,7 @@ export default function EmployerProfilePage() {
                       )
                     }
                     style={styles.input}
+                    required
                   >
                     <option value="">
                       Select Province
