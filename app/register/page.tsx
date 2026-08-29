@@ -178,7 +178,7 @@ export default function RegisterPage() {
        * Create the Supabase Auth user on the server as already confirmed.
        * This prevents Supabase from sending its own confirmation email.
        */
-      const registerResponse = await fetch("/api/register-account", {
+      const registerResponse = await fetch("/api/register-worker", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -205,16 +205,48 @@ export default function RegisterPage() {
         }),
       });
 
-      const registerResult = await registerResponse.json();
+      const responseContentType =
+        registerResponse.headers.get("content-type") || "";
+
+      const responseText = await registerResponse.text();
+
+      let registerResult: any = {};
+
+      if (responseContentType.includes("application/json")) {
+        try {
+          registerResult = responseText ? JSON.parse(responseText) : {};
+        } catch (parseError) {
+          console.error("Register API JSON parse error:", parseError);
+          throw new Error(
+            "The CareStaffing registration service returned an invalid response."
+          );
+        }
+      } else {
+        console.error("Register API returned non-JSON response:", {
+          status: registerResponse.status,
+          statusText: registerResponse.statusText,
+          body: responseText.slice(0, 500),
+        });
+
+        throw new Error(
+          registerResponse.status === 404
+            ? "CareStaffing registration service was not found. Please redeploy the /api/register-worker route."
+            : `CareStaffing registration service failed (${registerResponse.status}).`
+        );
+      }
 
       if (!registerResponse.ok) {
         throw new Error(
           registerResult?.error ||
+            registerResult?.message ||
             "We could not create your CareStaffing account."
         );
       }
 
-      const userId = registerResult?.user_id as string | undefined;
+      const userId =
+        (registerResult?.user_id ||
+          registerResult?.user?.id ||
+          registerResult?.id) as string | undefined;
 
       if (!userId) {
         throw new Error("User registration failed. No user ID found.");
@@ -302,15 +334,15 @@ export default function RegisterPage() {
         surname: accountType === "worker" ? surname.trim() : "",
         organisation_name: organisationName.trim(),
         email: cleanEmail,
-        mobile_number: mobile.trim(),
+        mobile: mobile.trim(),
         profession: accountType === "worker" ? profession : "",
-        professional_registration_number:
+        registration_number:
           accountType === "worker" ? registrationNumber.trim() : "",
         date_of_birth: accountType === "worker" ? dateOfBirth || null : null,
         age: accountType === "worker" ? age : null,
         gender: accountType === "worker" ? gender : "",
         country,
-        city_area: city.trim(),
+        city: city.trim(),
         platform: "CareStaffing",
         council_registration_document_url: councilDocUrl,
         pharmacist_permit_document_url: permitDocUrl,
@@ -346,7 +378,7 @@ export default function RegisterPage() {
       setMessage("Account created successfully.");
 
       if (accountType === "organisation") {
-        router.push("/employer/dashboard");
+        router.push("/employer");
       } else {
         router.push("/profile");
       }
@@ -459,7 +491,7 @@ export default function RegisterPage() {
                 <option>Pharmacist - PCDT Permit</option>
                 <option>Pharmacist - PCDT & PIMART Permit</option>
                 <option>Independent Prescriber</option>
-                <option>biokineticist</option>
+                <option>Biokinetist</option>
               </select>
 
               <input
