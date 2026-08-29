@@ -112,7 +112,29 @@ export default function AdminDashboardPage() {
       throw new Error(`Profiles load failed: ${error.message}`);
     }
 
-    setLocums((data || []) as Locum[]);
+    const allProfiles = (data || []) as Locum[];
+
+    const workerProfiles = allProfiles.filter((profile) => {
+      const role = (profile.role || "").trim().toLowerCase();
+      const accountType = (profile.account_type || "").trim().toLowerCase();
+
+      // Exclude admin and employer/organisation profiles from locum totals.
+      const excludedRoles = [
+        "admin",
+        "employer",
+        "organisation",
+        "organization",
+        "company",
+      ];
+
+      if (excludedRoles.includes(role)) return false;
+      if (excludedRoles.includes(accountType)) return false;
+
+      // Only count profiles that actually have a profession.
+      return Boolean(profile.profession?.trim());
+    });
+
+    setLocums(workerProfiles);
   }
 
   async function loadEmployers() {
@@ -289,7 +311,7 @@ export default function AdminDashboardPage() {
             <StatCard
               label="Total Available Locums"
               value={filteredLocums.length}
-              subtitle="All healthcare professionals"
+              subtitle="Worker profiles only"
               onClick={() => {
                 setProfession("All Professions");
                 setView("locums");
@@ -316,6 +338,7 @@ export default function AdminDashboardPage() {
 
           <p style={styles.kpiHint}>
             Select any profession card to drill down to the individual available locums.
+            Admin and employer profiles are excluded from locum totals.
           </p>
 
           {/* FILTERS */}
