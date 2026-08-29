@@ -94,6 +94,8 @@ export default function AdminDashboardPage() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [sendingShiftId, setSendingShiftId] = useState("");
 
   const [view, setView] = useState<
     "locums" | "employers" | "profession" | "province" | "openShifts" | "demand"
@@ -106,6 +108,7 @@ export default function AdminDashboardPage() {
   async function initialise() {
     setLoading(true);
     setError("");
+    setMessage("");
 
     try {
       const response = await fetch("/api/admin/dashboard", {
@@ -267,6 +270,87 @@ export default function AdminDashboardPage() {
     );
   }, [locums, employers]);
 
+  async function sendShiftReminder(shift: OpenLocumShift) {
+    if (!shift.is_available || shift.remaining <= 0) {
+      setError("This shift is already filled or closed.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Send a reminder for "${shift.title}" to matching ${shift.profession} locums?\n\nEach locum will receive an individual email. No CC or BCC will be used.`
+    );
+
+    if (!confirmed) return;
+
+    setSendingShiftId(shift.id);
+    setError("");
+    setMessage("");
+
+    try {
+      const response = await fetch("/api/shifts/notify-locums", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          shiftId: shift.id,
+          source: "admin-resend",
+        }),
+      });
+
+      const contentType = response.headers.get("content-type") || "";
+      const raw = await response.text();
+
+      if (!contentType.includes("application/json")) {
+        throw new Error(
+          `Reminder service returned an invalid response (${response.status}).`
+        );
+      }
+
+      const result = raw ? JSON.parse(raw) : {};
+
+      if (!response.ok || !result?.success) {
+        throw new Error(
+          result?.error ||
+            result?.message ||
+            `Unable to send reminder (${response.status}).`
+        );
+      }
+
+      const sent = Number(result?.sent || 0);
+      const failed = Number(result?.failed || 0);
+      const matched = Number(result?.matched || 0);
+
+      if (matched === 0) {
+        setMessage(
+          `No matching ${shift.profession} locums with email addresses were found.`
+        );
+        return;
+      }
+
+      if (failed > 0) {
+        setMessage(
+          `Reminder completed: ${sent} email${
+            sent === 1 ? "" : "s"
+          } sent individually and ${failed} failed.`
+        );
+        return;
+      }
+
+      setMessage(
+        `✓ Reminder sent individually to ${sent} matching ${
+          shift.profession
+        } locum${sent === 1 ? "" : "s"}.`
+      );
+    } catch (err: any) {
+      console.error("Admin reminder email error:", err);
+      setError(err?.message || "Unable to send reminder emails.");
+    } finally {
+      setSendingShiftId("");
+    }
+  }
+
   function drillProfession(professionName: string) {
     setProfession(professionName);
     setView("locums");
@@ -314,6 +398,7 @@ export default function AdminDashboardPage() {
       </header>
 
       {error && <div style={styles.error}>{error}</div>}
+      {message && <div style={styles.success}>{message}</div>}
 
       {!error && (
         <>
@@ -643,6 +728,7 @@ export default function AdminDashboardPage() {
                       <th style={styles.th}>Accepted</th>
                       <th style={styles.th}>Still Available</th>
                       <th style={styles.th}>Status</th>
+                      <th style={styles.th}>Action</th>
                     </tr>
                   </thead>
 
@@ -689,6 +775,30 @@ export default function AdminDashboardPage() {
                               ? "Available"
                               : "Filled / Closed"}
                           </span>
+                        </td>
+
+                        <td style={styles.td}>
+                          {shift.is_available && shift.remaining > 0 ? (
+                            <button
+                              type="button"
+                              style={{
+                                ...styles.reminderButton,
+                                ...(sendingShiftId === shift.id
+                                  ? styles.disabledButton
+                                  : {}),
+                              }}
+                              disabled={sendingShiftId === shift.id}
+                              onClick={() => void sendShiftReminder(shift)}
+                            >
+                              {sendingShiftId === shift.id
+                                ? "Sending..."
+                                : shift.accepted === 0
+                                ? "✉ Send Reminder"
+                                : "✉ Email Locums Again"}
+                            </button>
+                          ) : (
+                            <span style={styles.noAction}>—</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1213,6 +1323,36 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#475569",
     fontWeight: 800,
     fontSize: "12px",
+  },
+
+  reminderButton: {
+    padding: "9px 13px",
+    background: "#0f766e",
+    color: "#ffffff",
+    border: 0,
+    borderRadius: "9px",
+    cursor: "pointer",
+    fontWeight: 800,
+    whiteSpace: "nowrap",
+  },
+
+  disabledButton: {
+    opacity: 0.6,
+    cursor: "not-allowed",
+  },
+
+  noAction: {
+    color: "#94a3b8",
+  },
+
+  success: {
+    maxWidth: "1400px",
+    margin: "0 auto 20px",
+    padding: "15px",
+    background: "#dcfce7",
+    color: "#166534",
+    borderRadius: "12px",
+    fontWeight: 800,
   },
 
   error: {
