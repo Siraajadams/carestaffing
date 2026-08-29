@@ -1,547 +1,640 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "../../../lib/supabaseClient";
+import { supabase } from "../../lib/supabaseClient";
 
-type WorkerRegistrationForm = {
-  first_name: string;
-  surname: string;
-  email: string;
-  mobile: string;
-  id_number: string;
-  country: string;
-  dialing_code: string;
-  profession: string;
-  registration_number: string;
-  practice_number: string;
-  gender: string;
-  date_of_birth: string;
-  city: string;
-  password: string;
-  confirm_password: string;
-};
-
-const countryDetails: Record<
-  string,
-  {
-    dialingCode: string;
-  }
-> = {
-  "South Africa": {
-    dialingCode: "+27",
-  },
-  "United Kingdom": {
-    dialingCode: "+44",
-  },
-  "New Zealand": {
-    dialingCode: "+64",
-  },
-  Ireland: {
-    dialingCode: "+353",
-  },
-  "United States": {
-    dialingCode: "+1",
-  },
-};
-
-const professions = [
-  "Pharmacist",
-  "Pharmacist PIMART Permit",
-  "Pharmacist PCDT Permit",
-  "Pharmacist PCDT and PIMART Permit",
-  "Pharmacy Technician",
-  "Nurse",
-  "Doctor",
-  "Independent Prescriber",
-  "Optometrist",
-  "Physiotherapist",
-  "Biokinetist",
-];
-
-const genders = [
-  "Female",
-  "Male",
-  "Non-binary",
-  "Prefer not to say",
-];
-
-const initialForm: WorkerRegistrationForm = {
-  first_name: "",
-  surname: "",
-  email: "",
-  mobile: "",
-  id_number: "",
-  country: "South Africa",
-  dialing_code: "+27",
-  profession: "Pharmacist",
-  registration_number: "",
-  practice_number: "",
-  gender: "",
-  date_of_birth: "",
-  city: "",
-  password: "",
-  confirm_password: "",
-};
-
-function calculateAge(dateOfBirth: string): string {
-  if (!dateOfBirth) {
-    return "";
-  }
-
-  const birthDate = new Date(`${dateOfBirth}T00:00:00`);
-  const today = new Date();
-
-  if (Number.isNaN(birthDate.getTime()) || birthDate > today) {
-    return "";
-  }
-
-  let age = today.getFullYear() - birthDate.getFullYear();
-
-  const monthDifference = today.getMonth() - birthDate.getMonth();
-
-  if (
-    monthDifference < 0 ||
-    (monthDifference === 0 &&
-      today.getDate() < birthDate.getDate())
-  ) {
-    age -= 1;
-  }
-
-  return age >= 0 ? String(age) : "";
-}
-
-export default function WorkerRegisterPage() {
+export default function RegisterPage() {
   const router = useRouter();
 
-  const [form, setForm] =
-    useState<WorkerRegistrationForm>(initialForm);
-
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] =
-    useState(false);
-
-  const age = useMemo(
-    () => calculateAge(form.date_of_birth),
-    [form.date_of_birth],
+  const [accountType, setAccountType] = useState<"worker" | "organisation">(
+    "worker"
   );
 
-  function updateField<K extends keyof WorkerRegistrationForm>(
-    field: K,
-    value: WorkerRegistrationForm[K],
+  const [firstName, setFirstName] = useState("");
+  const [surname, setSurname] = useState("");
+  const [organisationName, setOrganisationName] = useState("");
+  const [email, setEmail] = useState("");
+  const [mobile, setMobile] = useState("");
+  const [profession, setProfession] = useState("Pharmacist");
+  const [registrationNumber, setRegistrationNumber] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
+  const [gender, setGender] = useState("Female");
+  const [country, setCountry] = useState("South Africa");
+  const [city, setCity] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const [councilDoc, setCouncilDoc] = useState<File | null>(null);
+  const [permitDoc, setPermitDoc] = useState<File | null>(null);
+  const [nationalIdDoc, setNationalIdDoc] = useState<File | null>(null);
+  const [profilePhoto, setProfilePhoto] = useState<File | null>(null);
+
+  const [cipcDoc, setCipcDoc] = useState<File | null>(null);
+  const [companyLogo, setCompanyLogo] = useState<File | null>(null);
+
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const pharmacistPermitProfessions = [
+    "Pharmacist - PIMART Permit",
+    "Pharmacist - PCDT Permit",
+    "Pharmacist - PCDT & PIMART Permit",
+  ];
+
+  const requiresPermitDocument =
+    accountType === "worker" &&
+    pharmacistPermitProfessions.includes(profession);
+
+  function calculateAge(dob: string) {
+    if (!dob) return null;
+
+    const birthDate = new Date(dob);
+    const today = new Date();
+
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+
+    if (
+      monthDiff < 0 ||
+      (monthDiff === 0 && today.getDate() < birthDate.getDate())
+    ) {
+      age--;
+    }
+
+    return age;
+  }
+
+  function cleanFileName(fileName: string) {
+    return fileName
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9.\-_]/g, "");
+  }
+
+  async function uploadFile(
+    bucket: string,
+    userId: string,
+    file: File | null,
+    label: string,
+    makePublicUrl = false
   ) {
-    setForm((current) => ({
-      ...current,
-      [field]: value,
-    }));
+    if (!file) return "";
+
+    const safeName = cleanFileName(file.name);
+    const filePath = `${userId}/${label}-${Date.now()}-${safeName}`;
+
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (error) throw new Error(error.message);
+
+    if (makePublicUrl) {
+      const { data: publicData } = supabase.storage
+        .from(bucket)
+        .getPublicUrl(data.path);
+
+      return publicData.publicUrl;
+    }
+
+    return data.path;
   }
 
-  function handleCountryChange(country: string) {
-    setForm((current) => ({
-      ...current,
-      country,
-      dialing_code:
-        countryDetails[country]?.dialingCode || "",
-    }));
-  }
-
-  async function register(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    setError("");
+  async function register(e: React.FormEvent) {
+    e.preventDefault();
     setMessage("");
 
-    const firstName = form.first_name.trim();
-    const surname = form.surname.trim();
-    const email = form.email.trim().toLowerCase();
-    const mobile = form.mobile.trim();
-    const idNumber = form.id_number.trim();
-    const registrationNumber =
-      form.registration_number.trim();
-    const practiceNumber = form.practice_number.trim();
-    const city = form.city.trim();
-
-    if (!firstName || !surname) {
-      setError("First name and surname are required.");
+    if (!email || !mobile || !password || !confirmPassword) {
+      setMessage("Please complete all required fields.");
       return;
     }
 
-    if (!email) {
-      setError("Email address is required.");
-      return;
+    if (accountType === "worker") {
+      if (!firstName || !surname || !profession) {
+        setMessage("Please complete worker details.");
+        return;
+      }
+
+      if (!dateOfBirth) {
+        setMessage("Please enter date of birth.");
+        return;
+      }
+
+      if (!registrationNumber) {
+        setMessage("Please enter professional registration number.");
+        return;
+      }
+
+      if (!councilDoc) {
+        setMessage("Please upload council registration document.");
+        return;
+      }
+
+      if (requiresPermitDocument && !permitDoc) {
+        setMessage(
+          "Please upload the applicable PIMART / PCDT permit document."
+        );
+        return;
+      }
+
+      if (!nationalIdDoc) {
+        setMessage("Please upload national identity document.");
+        return;
+      }
     }
 
-    if (!mobile) {
-      setError("Mobile number is required.");
-      return;
+    if (accountType === "organisation") {
+      if (!organisationName) {
+        setMessage("Please enter the organisation name.");
+        return;
+      }
+
+      if (!cipcDoc) {
+        setMessage("Please upload CIPC / company registration document.");
+        return;
+      }
     }
 
-    if (!idNumber) {
-      setError("ID or passport number is required.");
-      return;
-    }
-
-    if (!form.date_of_birth || !age) {
-      setError("Please enter a valid date of birth.");
-      return;
-    }
-
-    if (!form.gender) {
-      setError("Please select your gender.");
-      return;
-    }
-
-    if (!form.profession) {
-      setError("Please select your profession.");
-      return;
-    }
-
-    if (!registrationNumber) {
-      setError(
-        "Professional registration number is required.",
-      );
-      return;
-    }
-
-    if (form.password.length < 8) {
-      setError(
-        "Password must contain at least 8 characters.",
-      );
-      return;
-    }
-
-    if (form.password !== form.confirm_password) {
-      setError("Passwords do not match.");
+    if (password.trim() !== confirmPassword.trim()) {
+      setMessage("Passwords do not match.");
       return;
     }
 
     setLoading(true);
 
     try {
-      const response = await fetch("/api/register-worker", {
+      const age = calculateAge(dateOfBirth);
+      const cleanEmail = email.trim().toLowerCase();
+
+      /*
+       * Create the Supabase Auth user on the server as already confirmed.
+       * This prevents Supabase from sending its own confirmation email.
+       */
+      const registerResponse = await fetch("/api/register-account", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          email,
-          password: form.password,
-          first_name: firstName,
-          surname,
-          mobile,
-          id_number: idNumber,
-          country: form.country,
-          dialing_code: form.dialing_code,
-          profession: form.profession,
-          registration_number: registrationNumber,
-          practice_number: practiceNumber,
-          gender: form.gender,
-          date_of_birth: form.date_of_birth,
-          city,
+          email: cleanEmail,
+          password: password.trim(),
+          first_name: firstName.trim(),
+          surname: surname.trim(),
+          organisation_name: organisationName.trim(),
+          mobile: mobile.trim(),
+          profession,
+          registration_number: registrationNumber.trim(),
+          date_of_birth: dateOfBirth || null,
+          age,
+          gender,
+          country,
+          city: city.trim(),
+          role: accountType === "organisation" ? "employer" : "worker",
+          account_type:
+            accountType === "organisation" ? "employer" : "worker",
+          platform: "CareStaffing",
+          requires_permit_document: requiresPermitDocument,
         }),
       });
 
-      const result = await response.json();
+      const registerResult = await registerResponse.json();
 
-      if (!response.ok) {
-        setLoading(false);
-
-        const rawMessage =
-          String(result?.error || "").toLowerCase();
-
-        if (
-          rawMessage.includes("already registered") ||
-          rawMessage.includes("already exists") ||
-          rawMessage.includes("duplicate")
-        ) {
-          setError(
-            "An account already exists for this email address. Please use Login instead.",
-          );
-          return;
-        }
-
-        setError(
-          result?.error ||
-            "We could not create your CareStaffing account. Please try again.",
+      if (!registerResponse.ok) {
+        throw new Error(
+          registerResult?.error ||
+            "We could not create your CareStaffing account."
         );
-        return;
+      }
+
+      const userId = registerResult?.user_id as string | undefined;
+
+      if (!userId) {
+        throw new Error("User registration failed. No user ID found.");
       }
 
       /*
-       * The server creates the Supabase Auth user as already confirmed.
-       * This prevents Supabase from sending its confirmation email and
-       * therefore avoids the Supabase opt-out/report-spam screen.
-       *
-       * We then sign the worker in normally from the browser.
+       * Sign in immediately so the existing Storage RLS policies can
+       * authorise the worker / organisation document uploads below.
        */
-      const { error: loginError } =
+      const { error: signInError } =
         await supabase.auth.signInWithPassword({
-          email,
-          password: form.password,
+          email: cleanEmail,
+          password: password.trim(),
         });
 
-      if (loginError) {
-        setLoading(false);
-        setMessage(
-          "Your CareStaffing account was created successfully. Please log in with your email and password.",
+      if (signInError) {
+        throw new Error(
+          "Your account was created, but automatic login failed. Please use the Login page."
         );
-
-        setTimeout(() => {
-          router.push("/login");
-        }, 1800);
-
-        return;
       }
 
+      let councilDocUrl = "";
+      let permitDocUrl = "";
+      let nationalIdDocUrl = "";
+      let profilePhotoUrl = "";
+      let cipcDocUrl = "";
+      let companyLogoUrl = "";
+
+      if (accountType === "worker") {
+        councilDocUrl = await uploadFile(
+          "carestaffing-documents",
+          userId,
+          councilDoc,
+          "council-registration"
+        );
+
+        if (requiresPermitDocument) {
+          permitDocUrl = await uploadFile(
+            "carestaffing-documents",
+            userId,
+            permitDoc,
+            "pharmacist-permit"
+          );
+        }
+
+        nationalIdDocUrl = await uploadFile(
+          "carestaffing-documents",
+          userId,
+          nationalIdDoc,
+          "national-id"
+        );
+
+        profilePhotoUrl = await uploadFile(
+          "carestaffing-profile-photos",
+          userId,
+          profilePhoto,
+          "profile-photo",
+          true
+        );
+      }
+
+      if (accountType === "organisation") {
+        cipcDocUrl = await uploadFile(
+          "carestaffing-documents",
+          userId,
+          cipcDoc,
+          "cipc-document"
+        );
+
+        companyLogoUrl = await uploadFile(
+          "carestaffing-profile-photos",
+          userId,
+          companyLogo,
+          "company-logo",
+          true
+        );
+      }
+
+      const profilePayload = {
+        id: userId,
+        role: accountType === "organisation" ? "employer" : "worker",
+        account_type: accountType === "organisation" ? "employer" : "worker",
+        role_type: accountType,
+        first_name: accountType === "worker" ? firstName.trim() : "",
+        surname: accountType === "worker" ? surname.trim() : "",
+        organisation_name: organisationName.trim(),
+        email: cleanEmail,
+        mobile_number: mobile.trim(),
+        profession: accountType === "worker" ? profession : "",
+        professional_registration_number:
+          accountType === "worker" ? registrationNumber.trim() : "",
+        date_of_birth: accountType === "worker" ? dateOfBirth || null : null,
+        age: accountType === "worker" ? age : null,
+        gender: accountType === "worker" ? gender : "",
+        country,
+        city_area: city.trim(),
+        platform: "CareStaffing",
+        council_registration_document_url: councilDocUrl,
+        pharmacist_permit_document_url: permitDocUrl,
+        national_id_document_url: nationalIdDocUrl,
+        profile_photo_url: profilePhotoUrl || companyLogoUrl,
+        updated_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      };
+
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .upsert(profilePayload);
+
+      if (profileError) throw new Error(profileError.message);
+
+      if (accountType === "organisation") {
+        const { error: companyError } = await supabase.from("companies").upsert({
+          owner_id: userId,
+          business_name: organisationName.trim(),
+          email: cleanEmail,
+          mobile: mobile.trim(),
+          country,
+          city: city.trim(),
+          company_document_url: cipcDocUrl,
+          logo_url: companyLogoUrl,
+          updated_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+        });
+
+        if (companyError) throw new Error(companyError.message);
+      }
+
+      setMessage("Account created successfully.");
+
+      if (accountType === "organisation") {
+        router.push("/employer/dashboard");
+      } else {
+        router.push("/profile");
+      }
+    } catch (err: any) {
+      console.error("Registration error:", err);
+      setMessage(err.message || "Something went wrong.");
+    } finally {
       setLoading(false);
-      router.push("/profile");
-    } catch (registrationError) {
-      console.error("Worker registration error:", registrationError);
-      setLoading(false);
-      setError(
-        "We could not create your CareStaffing account. Please check your connection and try again.",
-      );
     }
   }
 
   return (
     <main style={styles.page}>
       <div style={styles.card}>
-        <Link href="/register" style={styles.back}>
-          ← Back
+        <Link href="/" style={styles.backLink}>
+          ← Back to CareStaffing
         </Link>
 
-        <p style={styles.eyebrow}>CareStaffing</p>
-
-        <h1 style={styles.title}>
-          Healthcare Worker Registration
-        </h1>
-
-        <p style={styles.sub}>
-          Create your locum account. These details will
-          automatically populate your Professional Profile and can
-          be updated later.
+        <p style={styles.label}>CareStaffing</p>
+        <h1 style={styles.title}>Create your account</h1>
+        <p style={styles.subtitle}>
+          Register as a healthcare worker or healthcare organisation.
         </p>
 
-        {error && <div style={styles.error}>{error}</div>}
-
-        {message && (
-          <div style={styles.success}>{message}</div>
-        )}
-
         <form onSubmit={register} style={styles.form}>
-          <section style={styles.section}>
-            <h2 style={styles.sectionTitle}>
-              Personal Details
-            </h2>
+          <div style={styles.toggle}>
+            <button
+              type="button"
+              onClick={() => setAccountType("worker")}
+              style={
+                accountType === "worker"
+                  ? styles.toggleActive
+                  : styles.toggleButton
+              }
+            >
+              Healthcare Worker
+            </button>
 
-            <div style={styles.grid}>
-              <Input
-                label="First Name *"
-                value={form.first_name}
-                autoComplete="given-name"
-                onChange={(value) =>
-                  updateField("first_name", value)
-                }
+            <button
+              type="button"
+              onClick={() => setAccountType("organisation")}
+              style={
+                accountType === "organisation"
+                  ? styles.toggleActive
+                  : styles.toggleButton
+              }
+            >
+              Organisation
+            </button>
+          </div>
+
+          {accountType === "worker" ? (
+            <>
+              <div style={styles.grid}>
+                <input
+                  style={styles.input}
+                  placeholder="First name *"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                />
+
+                <input
+                  style={styles.input}
+                  placeholder="Surname *"
+                  value={surname}
+                  onChange={(e) => setSurname(e.target.value)}
+                />
+              </div>
+
+              <div style={styles.grid}>
+                <input
+                  style={styles.input}
+                  type="date"
+                  value={dateOfBirth}
+                  onChange={(e) => setDateOfBirth(e.target.value)}
+                />
+
+                <input
+                  style={styles.input}
+                  value={
+                    dateOfBirth ? `${calculateAge(dateOfBirth)} years old` : ""
+                  }
+                  placeholder="Age"
+                  readOnly
+                />
+              </div>
+
+              <select
+                style={styles.input}
+                value={gender}
+                onChange={(e) => setGender(e.target.value)}
+              >
+                <option>Female</option>
+                <option>Male</option>
+              </select>
+
+              <select
+                style={styles.input}
+                value={profession}
+                onChange={(e) => {
+                  setProfession(e.target.value);
+                  setPermitDoc(null);
+                }}
+              >
+                <option>Doctor</option>
+                <option>Pharmacy Technician</option>
+                <option>Nurse</option>
+                <option>Pharmacist</option>
+                <option>Pharmacist - PIMART Permit</option>
+                <option>Pharmacist - PCDT Permit</option>
+                <option>Pharmacist - PCDT & PIMART Permit</option>
+                <option>Independent Prescriber</option>
+                <option>biokineticist</option>
+              </select>
+
+              <input
+                style={styles.input}
+                placeholder="Professional registration number *"
+                value={registrationNumber}
+                onChange={(e) => setRegistrationNumber(e.target.value)}
               />
 
-              <Input
-                label="Surname *"
-                value={form.surname}
-                autoComplete="family-name"
-                onChange={(value) =>
-                  updateField("surname", value)
-                }
+              <label style={styles.fileLabel}>
+                Upload council registration document *
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => setCouncilDoc(e.target.files?.[0] || null)}
+                />
+              </label>
+
+              {requiresPermitDocument && (
+                <label style={styles.permitFileLabel}>
+                  {profession === "Pharmacist - PIMART Permit"
+                    ? "Upload PIMART permit document *"
+                    : profession === "Pharmacist - PCDT Permit"
+                    ? "Upload PCDT permit document *"
+                    : "Upload PCDT & PIMART permit document(s) *"}
+
+                  <span style={styles.fileHint}>
+                    Upload your valid permit/certificate as PDF, JPG or PNG.
+                  </span>
+
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={(e) => setPermitDoc(e.target.files?.[0] || null)}
+                  />
+                </label>
+              )}
+
+              <label style={styles.fileLabel}>
+                Upload national identity document *
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) =>
+                    setNationalIdDoc(e.target.files?.[0] || null)
+                  }
+                />
+              </label>
+
+              <label style={styles.fileLabel}>
+                Upload profile photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) =>
+                    setProfilePhoto(e.target.files?.[0] || null)
+                  }
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <input
+                style={styles.input}
+                placeholder="Organisation / pharmacy / clinic name *"
+                value={organisationName}
+                onChange={(e) => setOrganisationName(e.target.value)}
               />
 
-              <Input
-                label="Email *"
-                type="email"
-                value={form.email}
-                autoComplete="email"
-                onChange={(value) =>
-                  updateField("email", value)
-                }
+              <label style={styles.fileLabel}>
+                Upload CIPC / company registration document *
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) => setCipcDoc(e.target.files?.[0] || null)}
+                />
+              </label>
+
+              <label style={styles.fileLabel}>
+                Upload company logo
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) =>
+                    setCompanyLogo(e.target.files?.[0] || null)
+                  }
+                />
+              </label>
+            </>
+          )}
+
+          <input
+            style={styles.input}
+            type="email"
+            placeholder="Email *"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          <input
+            style={styles.input}
+            placeholder="Mobile number *"
+            value={mobile}
+            onChange={(e) => setMobile(e.target.value)}
+          />
+
+          <div style={styles.grid}>
+            <select
+              style={styles.input}
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+            >
+              <option>South Africa</option>
+              <option>England</option>
+              <option>Wales</option>
+              <option>Scotland</option>
+              <option>New Zealand</option>
+            </select>
+
+            <input
+              style={styles.input}
+              placeholder="City / area"
+              value={city}
+              onChange={(e) => setCity(e.target.value)}
+            />
+          </div>
+
+          <div style={styles.grid}>
+            <div style={styles.passwordWrap}>
+              <input
+                style={styles.passwordInput}
+                type={showPassword ? "text" : "password"}
+                placeholder="Password *"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
               />
 
-              <Select
-                label="Gender *"
-                value={form.gender}
-                placeholder="Select gender"
-                options={genders}
-                onChange={(value) =>
-                  updateField("gender", value)
-                }
-              />
-
-              <Input
-                label="ID / Passport Number *"
-                value={form.id_number}
-                autoComplete="off"
-                onChange={(value) =>
-                  updateField("id_number", value)
-                }
-              />
-
-              <Input
-                label="Date of Birth *"
-                type="date"
-                value={form.date_of_birth}
-                max={new Date().toISOString().split("T")[0]}
-                onChange={(value) =>
-                  updateField("date_of_birth", value)
-                }
-              />
-
-              <Input
-                label="Age"
-                value={age}
-                disabled
-                placeholder="Calculated automatically"
-                onChange={() => undefined}
-              />
-
-              <Select
-                label="Country *"
-                value={form.country}
-                options={Object.keys(countryDetails)}
-                onChange={handleCountryChange}
-              />
-
-              <Input
-                label="Dialling Code"
-                value={form.dialing_code}
-                disabled
-                onChange={() => undefined}
-              />
-
-              <Input
-                label="Mobile Number *"
-                type="tel"
-                value={form.mobile}
-                autoComplete="tel"
-                placeholder="Enter number without country code"
-                onChange={(value) =>
-                  updateField("mobile", value)
-                }
-              />
-
-              <Input
-                label="City"
-                value={form.city}
-                autoComplete="address-level2"
-                onChange={(value) =>
-                  updateField("city", value)
-                }
-              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                style={styles.eyeButton}
+              >
+                {showPassword ? "🙈" : "👁️"}
+              </button>
             </div>
-          </section>
 
-          <section style={styles.section}>
-            <h2 style={styles.sectionTitle}>
-              Professional Details
-            </h2>
-
-            <div style={styles.grid}>
-              <Select
-                label="Profession *"
-                value={form.profession}
-                options={professions}
-                onChange={(value) =>
-                  updateField("profession", value)
-                }
+            <div style={styles.passwordWrap}>
+              <input
+                style={styles.passwordInput}
+                type={showConfirmPassword ? "text" : "password"}
+                placeholder="Confirm password *"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
               />
 
-              <Input
-                label="Registration Number *"
-                value={form.registration_number}
-                onChange={(value) =>
-                  updateField(
-                    "registration_number",
-                    value,
-                  )
-                }
-              />
-
-              <Input
-                label="Practice Number"
-                value={form.practice_number}
-                onChange={(value) =>
-                  updateField("practice_number", value)
-                }
-              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                style={styles.eyeButton}
+              >
+                {showConfirmPassword ? "🙈" : "👁️"}
+              </button>
             </div>
+          </div>
 
-            <p style={styles.helpText}>
-              Your professional headshot, CV, address, compliance
-              documents and banking details can be completed once
-              inside your Professional Profile.
-            </p>
-          </section>
+          {message && <div style={styles.error}>{message}</div>}
 
-          <section style={styles.section}>
-            <h2 style={styles.sectionTitle}>
-              Account Security
-            </h2>
-
-            <div style={styles.grid}>
-              <PasswordInput
-                label="Password *"
-                value={form.password}
-                visible={showPassword}
-                onToggle={() =>
-                  setShowPassword((current) => !current)
-                }
-                onChange={(value) =>
-                  updateField("password", value)
-                }
-              />
-
-              <PasswordInput
-                label="Confirm Password *"
-                value={form.confirm_password}
-                visible={showConfirmPassword}
-                onToggle={() =>
-                  setShowConfirmPassword(
-                    (current) => !current,
-                  )
-                }
-                onChange={(value) =>
-                  updateField("confirm_password", value)
-                }
-              />
-            </div>
-          </section>
-
-          <p style={styles.registrationNote}>
-            By creating an account you will be registered as a CareStaffing
-            healthcare worker. Please click the button once and wait while your
-            account is created.
-          </p>
-
-          <button
-            type="submit"
-            style={{
-              ...styles.button,
-              opacity: loading ? 0.7 : 1,
-              cursor: loading ? "not-allowed" : "pointer",
-            }}
-            disabled={loading}
-          >
-            {loading
-              ? "Creating Worker Account..."
-              : "Create Worker Account"}
+          <button type="submit" disabled={loading} style={styles.button}>
+            {loading ? "Creating account..." : "Create CareStaffing Account"}
           </button>
         </form>
 
-        <p style={styles.loginText}>
+        <p style={styles.footer}>
           Already registered?{" "}
-          <Link href="/login" style={styles.loginLink}>
+          <Link href="/login" style={styles.link}>
             Login here
           </Link>
         </p>
@@ -550,216 +643,112 @@ export default function WorkerRegisterPage() {
   );
 }
 
-type InputProps = {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-  placeholder?: string;
-  autoComplete?: string;
-  disabled?: boolean;
-  max?: string;
-};
-
-function Input({
-  label,
-  value,
-  onChange,
-  type = "text",
-  placeholder,
-  autoComplete,
-  disabled = false,
-  max,
-}: InputProps) {
-  return (
-    <label style={styles.field}>
-      <span style={styles.label}>{label}</span>
-
-      <input
-        type={type}
-        value={value}
-        disabled={disabled}
-        placeholder={placeholder}
-        autoComplete={autoComplete}
-        max={max}
-        onChange={(event) =>
-          onChange(event.target.value)
-        }
-        style={{
-          ...styles.input,
-          background: disabled ? "#f1f5f9" : "#ffffff",
-          color: disabled ? "#64748b" : "#0f172a",
-        }}
-      />
-    </label>
-  );
-}
-
-type SelectProps = {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (value: string) => void;
-  placeholder?: string;
-};
-
-function Select({
-  label,
-  value,
-  options,
-  onChange,
-  placeholder,
-}: SelectProps) {
-  return (
-    <label style={styles.field}>
-      <span style={styles.label}>{label}</span>
-
-      <select
-        value={value}
-        onChange={(event) =>
-          onChange(event.target.value)
-        }
-        style={styles.input}
-      >
-        {placeholder && (
-          <option value="">{placeholder}</option>
-        )}
-
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-type PasswordInputProps = {
-  label: string;
-  value: string;
-  visible: boolean;
-  onToggle: () => void;
-  onChange: (value: string) => void;
-};
-
-function PasswordInput({
-  label,
-  value,
-  visible,
-  onToggle,
-  onChange,
-}: PasswordInputProps) {
-  return (
-    <label style={styles.field}>
-      <span style={styles.label}>{label}</span>
-
-      <div style={styles.passwordWrap}>
-        <input
-          type={visible ? "text" : "password"}
-          value={value}
-          autoComplete="new-password"
-          onChange={(event) =>
-            onChange(event.target.value)
-          }
-          style={styles.passwordInput}
-        />
-
-        <button
-          type="button"
-          onClick={onToggle}
-          style={styles.eyeButton}
-          aria-label={
-            visible ? "Hide password" : "Show password"
-          }
-        >
-          {visible ? "🙈" : "👁️"}
-        </button>
-      </div>
-    </label>
-  );
-}
-
-const styles: Record<string, React.CSSProperties> = {
+const styles: { [key: string]: React.CSSProperties } = {
   page: {
     minHeight: "100vh",
-    background: "#f1f5f9",
-    padding: "28px 20px 60px",
+    background: "#ecfeff",
+    padding: "24px",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "flex-start",
     fontFamily: "Arial, sans-serif",
   },
   card: {
     width: "100%",
-    maxWidth: "980px",
-    margin: "0 auto",
+    maxWidth: "760px",
     background: "#ffffff",
-    padding: "30px",
-    borderRadius: "26px",
-    boxShadow: "0 20px 45px rgba(15,23,42,0.1)",
-    boxSizing: "border-box",
+    borderRadius: "24px",
+    padding: "28px",
+    boxShadow: "0 20px 45px rgba(15, 23, 42, 0.14)",
   },
-  back: {
+  backLink: {
     color: "#0f766e",
-    fontWeight: 800,
+    fontWeight: 700,
     textDecoration: "none",
   },
-  eyebrow: {
-    margin: "26px 0 8px",
+  label: {
+    marginTop: "28px",
     color: "#0f766e",
-    fontWeight: 900,
+    fontWeight: 800,
+    fontSize: "14px",
     textTransform: "uppercase",
-    letterSpacing: "1px",
   },
   title: {
-    margin: 0,
+    marginTop: "8px",
+    fontSize: "36px",
+    lineHeight: "42px",
     color: "#0f172a",
-    fontSize: "38px",
-    lineHeight: 1.15,
   },
-  sub: {
-    color: "#64748b",
+  subtitle: {
+    color: "#475569",
     fontSize: "17px",
-    lineHeight: 1.6,
     marginBottom: "24px",
   },
   form: {
     display: "grid",
-    gap: "20px",
+    gap: "14px",
   },
-  section: {
-    padding: "24px",
-    background: "#f8fafc",
-    border: "1px solid #e2e8f0",
-    borderRadius: "20px",
+  toggle: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: "10px",
+    marginBottom: "8px",
   },
-  sectionTitle: {
-    margin: "0 0 18px",
-    color: "#0f172a",
-    fontSize: "22px",
+  toggleButton: {
+    padding: "14px",
+    borderRadius: "14px",
+    border: "1px solid #99f6e4",
+    background: "#f0fdfa",
+    color: "#115e59",
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  toggleActive: {
+    padding: "14px",
+    borderRadius: "14px",
+    border: "1px solid #0f766e",
+    background: "#0f766e",
+    color: "#ffffff",
+    fontWeight: 800,
+    cursor: "pointer",
   },
   grid: {
     display: "grid",
-    gridTemplateColumns:
-      "repeat(auto-fit, minmax(240px, 1fr))",
-    gap: "16px",
-  },
-  field: {
-    display: "grid",
-    gap: "7px",
-  },
-  label: {
-    fontWeight: 800,
-    color: "#334155",
-    fontSize: "14px",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: "14px",
   },
   input: {
     width: "100%",
-    minHeight: "50px",
-    padding: "12px 14px",
-    borderRadius: "13px",
+    padding: "14px 16px",
+    borderRadius: "12px",
     border: "1px solid #cbd5e1",
+    fontSize: "16px",
     boxSizing: "border-box",
-    fontSize: "15px",
-    outline: "none",
+  },
+  fileLabel: {
+    display: "grid",
+    gap: "8px",
+    padding: "14px 16px",
+    borderRadius: "12px",
+    border: "1px dashed #14b8a6",
+    background: "#f0fdfa",
+    color: "#115e59",
+    fontWeight: 700,
+  },
+  permitFileLabel: {
+    display: "grid",
+    gap: "8px",
+    padding: "14px 16px",
+    borderRadius: "12px",
+    border: "2px dashed #0f766e",
+    background: "#ccfbf1",
+    color: "#134e4a",
+    fontWeight: 800,
+  },
+  fileHint: {
+    fontSize: "13px",
+    fontWeight: 500,
+    color: "#475569",
   },
   passwordWrap: {
     position: "relative",
@@ -767,74 +756,50 @@ const styles: Record<string, React.CSSProperties> = {
   },
   passwordInput: {
     width: "100%",
-    minHeight: "50px",
-    padding: "12px 52px 12px 14px",
-    borderRadius: "13px",
+    padding: "14px 52px 14px 16px",
+    borderRadius: "12px",
     border: "1px solid #cbd5e1",
+    fontSize: "16px",
     boxSizing: "border-box",
-    fontSize: "15px",
   },
   eyeButton: {
     position: "absolute",
+    right: "14px",
     top: "50%",
-    right: "12px",
     transform: "translateY(-50%)",
-    border: "none",
     background: "transparent",
+    border: "none",
     cursor: "pointer",
     fontSize: "18px",
+    zIndex: 10,
   },
-  helpText: {
-    margin: "18px 0 0",
-    padding: "13px 15px",
-    background: "#ecfeff",
-    color: "#155e75",
-    borderRadius: "12px",
-    lineHeight: 1.5,
-  },
-  registrationNote: {
-    margin: 0,
+  error: {
+    background: "#fee2e2",
+    color: "#991b1b",
     padding: "12px 14px",
-    background: "#eff6ff",
-    color: "#1e3a8a",
     borderRadius: "12px",
-    lineHeight: 1.5,
-    fontSize: "14px",
+    fontWeight: 600,
   },
   button: {
+    marginTop: "8px",
     width: "100%",
     padding: "16px",
     borderRadius: "14px",
     border: "none",
     background: "#0f766e",
     color: "#ffffff",
-    fontSize: "16px",
-    fontWeight: 900,
+    fontSize: "17px",
+    fontWeight: 800,
+    cursor: "pointer",
   },
-  error: {
-    background: "#fee2e2",
-    color: "#991b1b",
-    padding: "13px 15px",
-    borderRadius: "12px",
-    marginBottom: "16px",
-    fontWeight: 700,
-  },
-  success: {
-    background: "#dcfce7",
-    color: "#166534",
-    padding: "13px 15px",
-    borderRadius: "12px",
-    marginBottom: "16px",
-    fontWeight: 700,
-  },
-  loginText: {
+  footer: {
     marginTop: "22px",
     textAlign: "center",
-    color: "#64748b",
+    color: "#475569",
   },
-  loginLink: {
+  link: {
     color: "#0f766e",
-    fontWeight: 800,
+    fontWeight: 700,
     textDecoration: "none",
   },
 };
