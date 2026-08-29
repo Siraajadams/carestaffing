@@ -4,21 +4,24 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type RegisterWorkerBody = {
+type RegisterAccountBody = {
   email?: string;
   password?: string;
   first_name?: string;
   surname?: string;
+  organisation_name?: string;
   mobile?: string;
-  id_number?: string;
-  country?: string;
-  dialing_code?: string;
   profession?: string;
   registration_number?: string;
-  practice_number?: string;
+  date_of_birth?: string | null;
+  age?: number | null;
   gender?: string;
-  date_of_birth?: string;
+  country?: string;
   city?: string;
+  role?: "worker" | "employer";
+  account_type?: "worker" | "employer";
+  platform?: string;
+  requires_permit_document?: boolean;
 };
 
 function clean(value: unknown) {
@@ -32,59 +35,42 @@ export async function POST(request: Request) {
 
     if (!supabaseUrl || !serviceRoleKey) {
       console.error(
-        "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
+        "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY"
       );
 
       return NextResponse.json(
         {
           error:
-            "Server registration is not configured. Please contact CareStaffing support.",
+            "CareStaffing registration is not configured on the server.",
         },
-        { status: 500 },
+        { status: 500 }
       );
     }
 
-    const body = (await request.json()) as RegisterWorkerBody;
+    const body = (await request.json()) as RegisterAccountBody;
 
     const email = clean(body.email).toLowerCase();
     const password = String(body.password || "");
-    const firstName = clean(body.first_name);
-    const surname = clean(body.surname);
-    const mobile = clean(body.mobile);
-    const idNumber = clean(body.id_number);
-    const country = clean(body.country) || "South Africa";
-    const dialingCode = clean(body.dialing_code) || "+27";
-    const profession = clean(body.profession);
-    const registrationNumber = clean(body.registration_number);
-    const practiceNumber = clean(body.practice_number);
-    const gender = clean(body.gender);
-    const dateOfBirth = clean(body.date_of_birth);
-    const city = clean(body.city);
 
-    if (
-      !email ||
-      !password ||
-      !firstName ||
-      !surname ||
-      !mobile ||
-      !idNumber ||
-      !profession ||
-      !registrationNumber ||
-      !gender ||
-      !dateOfBirth
-    ) {
+    if (!email || !password) {
       return NextResponse.json(
-        { error: "Please complete all required registration fields." },
-        { status: 400 },
+        { error: "Email and password are required." },
+        { status: 400 }
       );
     }
 
     if (password.length < 8) {
       return NextResponse.json(
         { error: "Password must contain at least 8 characters." },
-        { status: 400 },
+        { status: 400 }
       );
     }
+
+    const role =
+      body.role === "employer" ? "employer" : "worker";
+
+    const accountType =
+      body.account_type === "employer" ? "employer" : "worker";
 
     const admin = createClient(supabaseUrl, serviceRoleKey, {
       auth: {
@@ -93,114 +79,82 @@ export async function POST(request: Request) {
       },
     });
 
-    /*
-     * IMPORTANT:
-     * email_confirm: true creates the user as already confirmed.
-     * Supabase therefore does NOT send the normal confirmation email.
-     */
-    const { data: created, error: createError } =
-      await admin.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: {
-          first_name: firstName,
-          surname,
-          mobile,
-          id_number: idNumber,
-          country,
-          dialing_code: dialingCode,
-          profession,
-          registration_number: registrationNumber,
-          practice_number: practiceNumber,
-          gender,
-          date_of_birth: dateOfBirth,
-          city,
-          role: "worker",
-          account_type: "worker",
-          platform: "CareStaffing",
-        },
-      });
-
-    if (createError || !created.user) {
-      console.error("Create worker auth error:", createError);
-
-      return NextResponse.json(
-        {
-          error:
-            createError?.message ||
-            "Could not create the CareStaffing account.",
-        },
-        { status: 400 },
-      );
-    }
-
-    const userId = created.user.id;
-
-    const profilePayload = {
-      id: userId,
-      first_name: firstName,
-      surname,
+    const { data, error } = await admin.auth.admin.createUser({
       email,
-      mobile,
-      id_number: idNumber,
-      country,
-      dialing_code: dialingCode,
-      profession,
-      registration_number: registrationNumber,
-      practice_number: practiceNumber || null,
-      gender,
-      date_of_birth: dateOfBirth,
-      city: city || null,
-      role: "worker",
-      account_type: "worker",
-      organisation_name: null,
-      company_id: null,
-      platform: "CareStaffing",
-      updated_at: new Date().toISOString(),
-    };
-
-    const { error: profileError } = await admin
-      .from("profiles")
-      .upsert(profilePayload, {
-        onConflict: "id",
-      });
-
-    if (profileError) {
-      console.error("Create worker profile error:", profileError);
+      password,
 
       /*
-       * Keep Auth and profiles consistent. If the profile cannot be
-       * created, remove the Auth user so the worker can safely retry.
+       * Critical setting:
+       * the user is created with a confirmed email, so Supabase does
+       * not send the standard confirmation email / opt-out link.
        */
-      await admin.auth.admin.deleteUser(userId);
+      email_confirm: true,
+
+      user_metadata: {
+        first_name: clean(body.first_name),
+        surname: clean(body.surname),
+        organisation_name: clean(body.organisation_name),
+        mobile: clean(body.mobile),
+        profession: clean(body.profession),
+        registration_number: clean(body.registration_number),
+        date_of_birth: body.date_of_birth || null,
+        age:
+          typeof body.age === "number" && Number.isFinite(body.age)
+            ? body.age
+            : null,
+        gender: clean(body.gender),
+        country: clean(body.country),
+        city: clean(body.city),
+        role,
+        account_type: accountType,
+        platform: "CareStaffing",
+        requires_permit_document:
+          Boolean(body.requires_permit_document),
+      },
+    });
+
+    if (error || !data.user) {
+      console.error("CareStaffing create user error:", error);
+
+      const message = error?.message || "Could not create account.";
+      const lower = message.toLowerCase();
+
+      if (
+        lower.includes("already") ||
+        lower.includes("exists") ||
+        lower.includes("registered")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "An account already exists for this email address. Please use Login.",
+          },
+          { status: 409 }
+        );
+      }
 
       return NextResponse.json(
-        {
-          error:
-            profileError.message ||
-            "The account was created but the worker profile could not be saved.",
-        },
-        { status: 500 },
+        { error: message },
+        { status: 400 }
       );
     }
 
     return NextResponse.json(
       {
         ok: true,
-        user_id: userId,
+        user_id: data.user.id,
       },
-      { status: 201 },
+      { status: 201 }
     );
   } catch (error) {
-    console.error("Register worker API error:", error);
+    console.error("CareStaffing register-account error:", error);
 
     return NextResponse.json(
       {
         error:
           "Unexpected registration error. Please try again.",
       },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }
