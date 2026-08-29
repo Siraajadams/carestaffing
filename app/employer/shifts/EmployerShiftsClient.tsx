@@ -91,6 +91,7 @@ export default function EmployerShiftsClient() {
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [notifyingShiftId, setNotifyingShiftId] = useState("");
 
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -550,6 +551,93 @@ export default function EmployerShiftsClient() {
     }
   }
 
+  function shiftCanBeEmailed(shift: Shift) {
+    const status = (shift.status || "open").trim().toLowerCase();
+
+    return ![
+      "filled",
+      "closed",
+      "completed",
+      "cancelled",
+      "canceled",
+    ].includes(status);
+  }
+
+  async function notifyLocumsAboutShift(shift: Shift) {
+    if (!shiftCanBeEmailed(shift)) {
+      setError(
+        "This shift is no longer available, so locum notifications cannot be sent."
+      );
+      return;
+    }
+
+    const profession =
+      shift.profession_required?.trim() || "matching healthcare";
+
+    const confirmed = window.confirm(
+      `Send this available shift to all matching ${profession} locums?\n\nEach locum will receive a separate private email.`
+    );
+
+    if (!confirmed) return;
+
+    setNotifyingShiftId(shift.id);
+    setError("");
+    setMessage("");
+
+    try {
+      const response = await fetch("/api/shifts/notify-locums", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          shiftId: shift.id,
+          source: "admin-resend",
+        }),
+      });
+
+      const result = await response.json().catch(() => null);
+
+      if (!response.ok || !result?.success) {
+        throw new Error(
+          result?.error ||
+            result?.message ||
+            "Could not send locum notifications."
+        );
+      }
+
+      const sent = Number(result.sent || 0);
+      const failed = Number(result.failed || 0);
+      const matched = Number(result.matched || 0);
+
+      if (matched === 0) {
+        setMessage(
+          `No matching ${profession} locums with email addresses were found.`
+        );
+      } else if (failed > 0) {
+        setMessage(
+          `Shift notification completed: ${sent} sent individually, ${failed} failed.`
+        );
+      } else {
+        setMessage(
+          `✓ ${sent} ${profession} locum email${
+            sent === 1 ? "" : "s"
+          } sent individually.`
+        );
+      }
+
+      console.log("Locum notification result:", result);
+    } catch (err: any) {
+      console.error("Notify locums error:", err);
+      setError(
+        err?.message ||
+          "Could not send the available shift to matching locums."
+      );
+    } finally {
+      setNotifyingShiftId("");
+    }
+  }
+
   function goToStripePayment(row?: Timesheet) {
     if (row && row.status?.toLowerCase() !== "approved") {
       setError(
@@ -679,12 +767,34 @@ export default function EmployerShiftsClient() {
                   />
                 </div>
 
-                <Link
-                  href={`/employer/applicants?shift=${shift.id}`}
-                  style={styles.applicantLink}
-                >
-                  View Applicants →
-                </Link>
+                <div style={styles.shiftActions}>
+                  <Link
+                    href={`/employer/applicants?shift=${shift.id}`}
+                    style={styles.applicantLink}
+                  >
+                    View Applicants →
+                  </Link>
+
+                  {shiftCanBeEmailed(shift) && (
+                    <button
+                      type="button"
+                      onClick={() => void notifyLocumsAboutShift(shift)}
+                      disabled={notifyingShiftId === shift.id}
+                      style={{
+                        ...styles.notifyLocumsButton,
+                        ...(notifyingShiftId === shift.id
+                          ? styles.disabledButton
+                          : {}),
+                      }}
+                    >
+                      {notifyingShiftId === shift.id
+                        ? "Sending emails..."
+                        : `✉ Email ${
+                            shift.profession_required || "Matching"
+                          } Locums`}
+                    </button>
+                  )}
+                </div>
 
                 <hr style={styles.hr} />
 
@@ -1314,11 +1424,30 @@ const styles: Record<string, React.CSSProperties> = {
     gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))",
     gap: "16px",
   },
+  shiftActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    flexWrap: "wrap",
+    marginTop: "20px",
+  },
   applicantLink: {
     display: "inline-block",
-    marginTop: "20px",
     color: "#0f766e",
     fontWeight: 900,
+  },
+  notifyLocumsButton: {
+    border: "none",
+    borderRadius: "12px",
+    background: "#0f766e",
+    color: "white",
+    padding: "12px 16px",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+  disabledButton: {
+    opacity: 0.6,
+    cursor: "not-allowed",
   },
   hr: {
     border: 0,
