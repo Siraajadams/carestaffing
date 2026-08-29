@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { supabase } from "../../../lib/supabaseClient";
 
 type Locum = {
   id: string;
@@ -82,118 +81,33 @@ export default function AdminDashboardPage() {
     setError("");
 
     try {
-      const { data: profileData, error: profileError } = await supabase
-        .from("profiles")
-        .select(
-          `
-          id,
-          first_name,
-          surname,
-          email,
-          mobile,
-          profession,
-          province,
-          city,
-          registration_number,
-          role,
-          account_type,
-          role_type,
-          organisation_name,
-          company_id
-        `,
-        )
-        .order("surname", { ascending: true });
-
-      if (profileError) {
-        throw new Error(`Profiles load failed: ${profileError.message}`);
-      }
-
-      const allProfiles = (profileData || []) as Locum[];
-
-      const workerProfiles = allProfiles.filter((profile) => {
-        const role = (profile.role || "").trim().toLowerCase();
-        const accountType = (profile.account_type || "").trim().toLowerCase();
-        const roleType = (profile.role_type || "").trim().toLowerCase();
-
-        const isWorker =
-          role === "worker" ||
-          accountType === "worker" ||
-          roleType === "worker";
-
-        return isWorker && Boolean(profile.profession?.trim());
+      const response = await fetch("/api/admin/dashboard", {
+        method: "GET",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
       });
 
-      setLocums(workerProfiles);
+      const contentType = response.headers.get("content-type") || "";
+      const raw = await response.text();
 
-      const { data: companyData, error: companyError } = await supabase
-        .from("companies")
-        .select(
-          `
-          id,
-          business_name,
-          province,
-          city,
-          email,
-          phone,
-          owner_id
-        `,
-        )
-        .order("business_name", { ascending: true });
-
-      if (companyError) {
-        throw new Error(`Companies load failed: ${companyError.message}`);
+      if (!contentType.includes("application/json")) {
+        throw new Error(
+          `Admin dashboard service returned an invalid response (${response.status}).`,
+        );
       }
 
-      const companyEmployers: Employer[] = ((companyData || []) as Employer[]).map(
-        (company) => ({
-          ...company,
-          source: "company",
-        }),
-      );
+      const result = raw ? JSON.parse(raw) : {};
 
-      const companyOwnerIds = new Set(
-        companyEmployers
-          .map((company) => company.owner_id)
-          .filter(Boolean) as string[],
-      );
+      if (!response.ok) {
+        throw new Error(
+          result?.error || `Unable to load admin dashboard (${response.status}).`,
+        );
+      }
 
-      const profileEmployers: Employer[] = allProfiles
-        .filter((profile) => {
-          const role = (profile.role || "").trim().toLowerCase();
-          const accountType = (profile.account_type || "").trim().toLowerCase();
-          const roleType = (profile.role_type || "").trim().toLowerCase();
-
-          const employerValues = [
-            "employer",
-            "organisation",
-            "organization",
-            "company",
-          ];
-
-          const isEmployer =
-            employerValues.includes(role) ||
-            employerValues.includes(accountType) ||
-            employerValues.includes(roleType) ||
-            Boolean(profile.organisation_name);
-
-          return isEmployer && !companyOwnerIds.has(profile.id);
-        })
-        .map((profile) => ({
-          id: `profile-${profile.id}`,
-          business_name:
-            profile.organisation_name ||
-            [profile.first_name, profile.surname].filter(Boolean).join(" ") ||
-            "Employer",
-          province: profile.province || null,
-          city: profile.city || null,
-          email: profile.email || null,
-          phone: profile.mobile || null,
-          owner_id: profile.id,
-          source: "profile" as const,
-        }));
-
-      setEmployers([...companyEmployers, ...profileEmployers]);
+      setLocums((result?.locums || []) as Locum[]);
+      setEmployers((result?.employers || []) as Employer[]);
     } catch (err: any) {
+      console.error("Admin dashboard load error:", err);
       setError(err?.message || "Unable to load admin dashboard.");
     } finally {
       setLoading(false);
@@ -351,7 +265,7 @@ export default function AdminDashboardPage() {
             <StatCard
               label="Total Available Locums"
               value={filteredLocums.length}
-              subtitle="Registered worker accounts only"
+              subtitle="All registered worker accounts"
               onClick={() => {
                 setProfession("All Professions");
                 setView("locums");
@@ -378,8 +292,8 @@ export default function AdminDashboardPage() {
 
           <p style={styles.kpiHint}>
             Select any profession card to drill down to individual registered locums.
-            Only accounts explicitly classified as workers are counted; admin and employer
-            profiles are excluded even if they have a healthcare profession.
+            Counts are loaded securely from the server so all worker profiles are included
+            without exposing the profiles table publicly.
           </p>
 
           {/* FILTERS */}
@@ -529,7 +443,7 @@ export default function AdminDashboardPage() {
                           colSpan={6}
                           style={styles.empty}
                         >
-                          No locums are currently visible. If records exist in Supabase, check the SELECT/RLS policy for the profiles table.
+                          No registered worker profiles were returned by the admin dashboard service.
                         </td>
                       </tr>
                     )}
