@@ -186,6 +186,12 @@ export async function POST(req: NextRequest) {
     const shiftId = body.shiftId?.trim();
     const source = body.source || "automatic";
 
+    console.log("[notify-locums] POST reached", {
+      shiftId,
+      source,
+      timestamp: new Date().toISOString(),
+    });
+
     if (!shiftId) {
       return NextResponse.json(
         {
@@ -320,9 +326,10 @@ export async function POST(req: NextRequest) {
 
     let adminNotified = false;
     let adminNotificationError: string | null = null;
+    let adminResendId: string | null = null;
 
     try {
-      await sendEmail({
+      const adminResult = await sendEmail({
         apiKey: resendApiKey,
         to: adminEmail,
         subject:
@@ -399,7 +406,15 @@ export async function POST(req: NextRequest) {
         `,
       });
 
+      adminResendId =
+        typeof adminResult?.id === "string" ? adminResult.id : null;
+
       adminNotified = true;
+
+      console.log("[notify-locums] Admin email accepted by Resend", {
+        to: adminEmail,
+        id: adminResendId,
+      });
     } catch (error) {
       adminNotificationError =
         error instanceof Error ? error.message : "Admin email failed";
@@ -421,6 +436,7 @@ export async function POST(req: NextRequest) {
         sent: 0,
         failed: 0,
         adminNotified,
+        adminResendId,
         adminNotificationError,
         message: `No registered ${profession} locums with email addresses were found.`,
       });
@@ -432,6 +448,11 @@ export async function POST(req: NextRequest) {
     const failures: {
       email: string;
       error: string;
+    }[] = [];
+
+    const resendIds: {
+      email: string;
+      id: string | null;
     }[] = [];
 
     for (const locum of uniqueLocums) {
@@ -742,18 +763,31 @@ export async function POST(req: NextRequest) {
           </html>
         `;
 
-        await sendEmail({
+        const resendResult = await sendEmail({
           apiKey: resendApiKey,
           to: recipientEmail,
-          subject: `New ${profession} Locum Shift Available`,
+          subject:
+            source === "admin-resend"
+              ? `Reminder: ${profession} Locum Shift Still Available`
+              : `New ${profession} Locum Shift Available`,
           html,
+        });
+
+        const resendId =
+          typeof resendResult?.id === "string" ? resendResult.id : null;
+
+        resendIds.push({
+          email: recipientEmail,
+          id: resendId,
         });
 
         sent++;
 
-        console.log(
-          `Shift ${shiftId}: email sent individually to ${recipientEmail}`
-        );
+        console.log("[notify-locums] Resend accepted locum email", {
+          shiftId,
+          to: recipientEmail,
+          id: resendId,
+        });
       } catch (emailError) {
         failed++;
 
@@ -774,7 +808,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       shiftId,
       source,
@@ -784,7 +818,9 @@ export async function POST(req: NextRequest) {
       sent,
       failed,
       adminNotified,
+      adminResendId,
       adminNotificationError,
+      resendIds,
       failures:
         process.env.NODE_ENV === "development"
           ? failures
@@ -793,9 +829,12 @@ export async function POST(req: NextRequest) {
         failed === 0
           ? `${sent} ${profession} locum email${
               sent === 1 ? "" : "s"
-            } sent individually.`
-          : `${sent} emails sent individually. ${failed} failed.`,
+            } accepted by Resend.`
+          : `${sent} emails accepted by Resend. ${failed} failed.`,
     });
+
+    response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    return response;
   } catch (error: unknown) {
     console.error("notify-locums fatal error:", error);
 
