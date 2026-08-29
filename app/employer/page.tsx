@@ -7,6 +7,10 @@ import { supabase } from "../../lib/supabaseClient";
 
 const professions = [
   "Pharmacist",
+  "Pharmacist PIMART Permit",
+  "Pharmacist PCDT Permit",
+  "Pharmacist PCDT and PIMART Permit",
+  "Pharmacy Technician",
   "Doctor",
   "Nurse",
   "Physiotherapist",
