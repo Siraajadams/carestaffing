@@ -16,6 +16,9 @@ type Locum = {
   registration_number: string | null;
   role: string | null;
   account_type: string | null;
+  role_type?: string | null;
+  organisation_name?: string | null;
+  company_id?: string | null;
 };
 
 type Employer = {
@@ -26,6 +29,7 @@ type Employer = {
   email: string | null;
   phone: string | null;
   owner_id: string | null;
+  source?: "company" | "profile";
 };
 
 const provinces = [
@@ -78,86 +82,122 @@ export default function AdminDashboardPage() {
     setError("");
 
     try {
-      // ADMIN LOGIN CHECK REMOVED
-      // Dashboard loads directly without requiring an authenticated admin session.
-      await Promise.all([loadLocums(), loadEmployers()]);
+      const { data: profileData, error: profileError } = await supabase
+        .from("profiles")
+        .select(
+          `
+          id,
+          first_name,
+          surname,
+          email,
+          mobile,
+          profession,
+          province,
+          city,
+          registration_number,
+          role,
+          account_type,
+          role_type,
+          organisation_name,
+          company_id
+        `,
+        )
+        .order("surname", { ascending: true });
+
+      if (profileError) {
+        throw new Error(`Profiles load failed: ${profileError.message}`);
+      }
+
+      const allProfiles = (profileData || []) as Locum[];
+
+      const workerProfiles = allProfiles.filter((profile) => {
+        const role = (profile.role || "").trim().toLowerCase();
+        const accountType = (profile.account_type || "").trim().toLowerCase();
+        const roleType = (profile.role_type || "").trim().toLowerCase();
+
+        const isWorker =
+          role === "worker" ||
+          accountType === "worker" ||
+          roleType === "worker";
+
+        return isWorker && Boolean(profile.profession?.trim());
+      });
+
+      setLocums(workerProfiles);
+
+      const { data: companyData, error: companyError } = await supabase
+        .from("companies")
+        .select(
+          `
+          id,
+          business_name,
+          province,
+          city,
+          email,
+          phone,
+          owner_id
+        `,
+        )
+        .order("business_name", { ascending: true });
+
+      if (companyError) {
+        throw new Error(`Companies load failed: ${companyError.message}`);
+      }
+
+      const companyEmployers: Employer[] = ((companyData || []) as Employer[]).map(
+        (company) => ({
+          ...company,
+          source: "company",
+        }),
+      );
+
+      const companyOwnerIds = new Set(
+        companyEmployers
+          .map((company) => company.owner_id)
+          .filter(Boolean) as string[],
+      );
+
+      const profileEmployers: Employer[] = allProfiles
+        .filter((profile) => {
+          const role = (profile.role || "").trim().toLowerCase();
+          const accountType = (profile.account_type || "").trim().toLowerCase();
+          const roleType = (profile.role_type || "").trim().toLowerCase();
+
+          const employerValues = [
+            "employer",
+            "organisation",
+            "organization",
+            "company",
+          ];
+
+          const isEmployer =
+            employerValues.includes(role) ||
+            employerValues.includes(accountType) ||
+            employerValues.includes(roleType) ||
+            Boolean(profile.organisation_name);
+
+          return isEmployer && !companyOwnerIds.has(profile.id);
+        })
+        .map((profile) => ({
+          id: `profile-${profile.id}`,
+          business_name:
+            profile.organisation_name ||
+            [profile.first_name, profile.surname].filter(Boolean).join(" ") ||
+            "Employer",
+          province: profile.province || null,
+          city: profile.city || null,
+          email: profile.email || null,
+          phone: profile.mobile || null,
+          owner_id: profile.id,
+          source: "profile" as const,
+        }));
+
+      setEmployers([...companyEmployers, ...profileEmployers]);
     } catch (err: any) {
       setError(err?.message || "Unable to load admin dashboard.");
     } finally {
       setLoading(false);
     }
-  }
-
-  async function loadLocums() {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select(
-        `
-        id,
-        first_name,
-        surname,
-        email,
-        mobile,
-        profession,
-        province,
-        city,
-        registration_number,
-        role,
-        account_type
-      `,
-      )
-      .order("surname", { ascending: true });
-
-    if (error) {
-      throw new Error(`Profiles load failed: ${error.message}`);
-    }
-
-    const allProfiles = (data || []) as Locum[];
-
-    const workerProfiles = allProfiles.filter((profile) => {
-      const role = (profile.role || "").trim().toLowerCase();
-      const accountType = (profile.account_type || "").trim().toLowerCase();
-
-      // Exclude admin and employer/organisation profiles from locum totals.
-      const excludedRoles = [
-        "admin",
-        "employer",
-        "organisation",
-        "organization",
-        "company",
-      ];
-
-      if (excludedRoles.includes(role)) return false;
-      if (excludedRoles.includes(accountType)) return false;
-
-      // Only count profiles that actually have a profession.
-      return Boolean(profile.profession?.trim());
-    });
-
-    setLocums(workerProfiles);
-  }
-
-  async function loadEmployers() {
-    const { data, error } = await supabase
-      .from("companies")
-      .select(
-        `
-        id,
-        business_name,
-        province,
-        city,
-        email,
-        phone,
-        owner_id
-      `,
-      )
-      .order("business_name", { ascending: true });
-
-    if (error) {
-      throw new Error(`Companies load failed: ${error.message}`);
-    }
-
-    setEmployers((data || []) as Employer[]);
   }
 
   const professionOptions = useMemo(() => {
@@ -311,7 +351,7 @@ export default function AdminDashboardPage() {
             <StatCard
               label="Total Available Locums"
               value={filteredLocums.length}
-              subtitle="Worker profiles only"
+              subtitle="Registered worker accounts only"
               onClick={() => {
                 setProfession("All Professions");
                 setView("locums");
@@ -321,7 +361,7 @@ export default function AdminDashboardPage() {
             <StatCard
               label="Total Employers"
               value={filteredEmployers.length}
-              subtitle="Registered healthcare employers"
+              subtitle="Companies + employer profiles"
               onClick={() => setView("employers")}
             />
 
@@ -337,8 +377,9 @@ export default function AdminDashboardPage() {
           </section>
 
           <p style={styles.kpiHint}>
-            Select any profession card to drill down to the individual available locums.
-            Admin and employer profiles are excluded from locum totals.
+            Select any profession card to drill down to individual registered locums.
+            Only accounts explicitly classified as workers are counted; admin and employer
+            profiles are excluded even if they have a healthcare profession.
           </p>
 
           {/* FILTERS */}
@@ -520,6 +561,7 @@ export default function AdminDashboardPage() {
                       <th style={styles.th}>City</th>
                       <th style={styles.th}>Email</th>
                       <th style={styles.th}>Phone</th>
+                      <th style={styles.th}>Source</th>
                     </tr>
                   </thead>
 
@@ -547,8 +589,22 @@ export default function AdminDashboardPage() {
                         <td style={styles.td}>
                           {employer.phone || "—"}
                         </td>
+
+                        <td style={styles.td}>
+                          {employer.source === "company"
+                            ? "Company"
+                            : "Employer profile"}
+                        </td>
                       </tr>
                     ))}
+
+                    {!filteredEmployers.length && (
+                      <tr>
+                        <td colSpan={6} style={styles.empty}>
+                          No registered employers are currently visible.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
