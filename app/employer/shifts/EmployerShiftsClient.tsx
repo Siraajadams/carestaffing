@@ -20,6 +20,7 @@ type Shift = {
   status: string | null;
   company_id?: string | null;
   created_by?: string | null;
+  created_at?: string | null;
 };
 
 type Timesheet = {
@@ -92,6 +93,7 @@ export default function EmployerShiftsClient() {
   const [savingId, setSavingId] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [notifyingShiftId, setNotifyingShiftId] = useState("");
+  const [closingShiftId, setClosingShiftId] = useState("");
 
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -638,6 +640,53 @@ export default function EmployerShiftsClient() {
     }
   }
 
+  async function completeAndCloseShift(shift: Shift) {
+    const status = (shift.status || "open").trim().toLowerCase();
+
+    if (["completed", "closed", "cancelled", "canceled"].includes(status)) {
+      setError("This post is already closed.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Complete and close "${shift.title || "this shift"}"?\n\n` +
+        "The post will no longer be treated as available and locum notification emails will be disabled. " +
+        "Existing applicants and timesheet history will remain available."
+    );
+
+    if (!confirmed) return;
+
+    setClosingShiftId(shift.id);
+    setError("");
+    setMessage("");
+
+    try {
+      const { data: updated, error: updateError } = await supabase
+        .from("shifts")
+        .update({
+          status: "completed",
+        })
+        .eq("id", shift.id)
+        .select("*")
+        .single();
+
+      if (updateError) throw updateError;
+
+      console.log("Shift completed and closed:", updated);
+
+      setMessage(
+        `✓ ${shift.title || "Shift"} has been completed and closed.`
+      );
+
+      await refreshEmployerData(false);
+    } catch (err: any) {
+      console.error("Complete shift error:", err);
+      setError(err?.message || "Could not complete and close this post.");
+    } finally {
+      setClosingShiftId("");
+    }
+  }
+
   function goToStripePayment(row?: Timesheet) {
     if (row && row.status?.toLowerCase() !== "approved") {
       setError(
@@ -749,7 +798,14 @@ export default function EmployerShiftsClient() {
                     value={shift.profession_required || "—"}
                   />
                   <Detail label="City" value={shift.city || "—"} />
-                  <Detail label="Date" value={formatDate(shift.shift_date)} />
+                  <Detail
+                    label="Posted"
+                    value={formatDateTime(shift.created_at)}
+                  />
+                  <Detail
+                    label="Shift Date"
+                    value={formatDate(shift.shift_date)}
+                  />
                   <Detail label="Applicants" value={String(applicants)} />
                   <Detail
                     label="Locum Rate"
@@ -792,6 +848,24 @@ export default function EmployerShiftsClient() {
                         : `✉ Email ${
                             shift.profession_required || "Matching"
                           } Locums`}
+                    </button>
+                  )}
+
+                  {shiftCanBeEmailed(shift) && (
+                    <button
+                      type="button"
+                      onClick={() => void completeAndCloseShift(shift)}
+                      disabled={closingShiftId === shift.id}
+                      style={{
+                        ...styles.completeShiftButton,
+                        ...(closingShiftId === shift.id
+                          ? styles.disabledButton
+                          : {}),
+                      }}
+                    >
+                      {closingShiftId === shift.id
+                        ? "Closing..."
+                        : "✓ Complete & Close Post"}
                     </button>
                   )}
                 </div>
@@ -1313,6 +1387,20 @@ function formatDate(value?: string | null) {
   });
 }
 
+function formatDateTime(value?: string | null) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleDateString("en-ZA", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 function formatTime(value?: string | null) {
   if (!value) return "—";
   return value.slice(0, 5);
@@ -1441,6 +1529,15 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "12px",
     background: "#0f766e",
     color: "white",
+    padding: "12px 16px",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+  completeShiftButton: {
+    border: "1px solid #dc2626",
+    borderRadius: "12px",
+    background: "#fff",
+    color: "#b91c1c",
     padding: "12px 16px",
     fontWeight: 900,
     cursor: "pointer",
